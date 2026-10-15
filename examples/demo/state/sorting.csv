@@ -1,0 +1,3 @@
+item,function,n,value,unit,kind,exp,commit,measured_at,source,note
+sort_time,sorted,16,0.187,us,measured,EXP-0001,CPython 3.11.8,2026-10-15,EXP-0001/timings.csv,median of 7 runs of 2000 sorts
+sort_time,insertion_sort,16,3.016,us,measured,EXP-0001,CPython 3.11.8,2026-10-15,EXP-0001/timings.csv,median of 7 runs of 2000 sorts

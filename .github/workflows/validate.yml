@@ -1,0 +1,33 @@
+# Every push is validated again here, behind the local hooks: a commit made with --no-verify, from a clone
+# without the hooks, or on the GitHub web still gets checked, and GitHub mails the pusher when it fails.
+name: validate
+on:
+  push:
+    branches: ["**"]  # not the number counter (refs/labledger/ids), which carries no records
+  pull_request:
+  workflow_dispatch:
+concurrency:  # a burst of pushes runs at most twice: the one in progress and the newest waiting
+  group: validate-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.13"]  # the oldest Python the tool supports, and a current one
+    steps:
+      - uses: actions/checkout@v4
+        with:  # validate finds the attachments in git's index; the tests do not read them
+          sparse-checkout: |
+            /*
+            !/experiments/attachments/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --quiet pytest
+      - run: python scripts/labledger.py validate --committed
+      - run: python -m pytest tests -q

@@ -1,0 +1,3 @@
+#!/bin/sh
+# labledger: refuse to push a tip whose tree would not validate, or whose tool tests fail (AGENTS.md, Commits).
+exec python3 "$(dirname "$0")/../labledger.py" --root "$(git rev-parse --show-toplevel)" hook pre-push "$@"
