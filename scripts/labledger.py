@@ -2820,6 +2820,15 @@ def _upstream(root: Path) -> tuple[str, str, str] | None:
     return remote, merge, tracking
 
 
+def git_reply(r: subprocess.CompletedProcess) -> list[str]:
+    """What a refused push says: the remote's own lines first, then git's verdict, without the lines that only name
+    the remote (git writes a refusal's reason on stdout as well as stderr)."""
+    lines = [line for line in f"{r.stderr}\n{r.stdout}".splitlines() if line.strip()]
+    said = [line for line in lines if line.startswith("remote:")]
+    verdict = [line for line in lines if not line.startswith(("remote:", "To ", "Done"))]
+    return said[:10] + verdict[-12:] or ["git push failed"]
+
+
 def _push(root: Path, remote: str, merge: str, tracking: str) -> tuple[str, str | None]:
     """Push the branch tip when the upstream lacks it: ("ok", report or None), ("rejected", None) when the upstream
     has commits this clone lacks, or ("failed", report) when the push was refused otherwise or got no answer."""
@@ -2836,9 +2845,8 @@ def _push(root: Path, remote: str, merge: str, tracking: str) -> tuple[str, str 
         if r.returncode == 0:
             return "ok", f"pushed {tip[:7]} to {remote}"
         if "[rejected]" not in r.stdout:  # the pre-push check refused, the remote refused, or it could not be reached
-            lines = [l for l in f"{r.stderr}\n{r.stdout}".splitlines() if l.strip()]  # git names a refusal's reason on stdout
             return "failed", ("not pushed — the commit stays local; the next write, `commit` or `sync` pushes it:\n  "
-                              + "\n  ".join(lines[-12:] or ["git push failed"]))
+                              + "\n  ".join(git_reply(r)))
         _run(root, "fetch", "-q", remote, env=env, timeout=PUSH_TIMEOUT)  # a session sharing this clone may have pushed a descendant
     except subprocess.TimeoutExpired:
         return "failed", (f"not pushed — {remote} did not answer within {PUSH_TIMEOUT} s; the commit stays local, and the next write, "
@@ -3213,8 +3221,7 @@ def reserve_number(root: Path, key: str, local_max: int, fmt: str) -> int | None
             _run(root, "update-ref", ID_REF, new)
             return n
         if "[rejected]" not in r.stdout:  # not a race lost to another server's push: the remote refused it, or no answer
-            lines = [l for l in f"{r.stderr}\n{r.stdout}".splitlines() if l.strip()]  # the remote's reason comes first
-            raise ReserveError(f"cannot push the number counter to {remote}:\n  " + "\n  ".join(lines[-12:] or ["git push failed"]))
+            raise ReserveError(f"cannot push the number counter to {remote}:\n  " + "\n  ".join(git_reply(r)))
     raise ReserveError(f"the number counter on {remote} kept moving ({RESERVE_ATTEMPTS} attempts)")
 
 
