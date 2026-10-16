@@ -7,6 +7,8 @@ observations and decisions, one Markdown file per record in a git repository, ch
   current value in `state/` names its experiment, the code version and the day it was measured.
 - **Statuses are judged again.** `review` lists what needs another look: TODOs that newer records mention,
   experiments left in flight, issues nobody touched for two months.
+- **Agents record on their own.** A skill named as you call the ledger leads them to it whenever their work produces
+  something to keep, and tells them which command records it.
 - **Agents follow one rulebook.** [`AGENTS.md`](AGENTS.md) holds every rule, and the tool checks the form of each one:
   `validate`, the write commands before they write, and every commit made through the tool or its hooks. What no
   tool can check is marked as guidance. The write commands then commit and push what they wrote.
@@ -16,21 +18,22 @@ observations and decisions, one Markdown file per record in a git repository, ch
 
 ## Start a ledger
 
-1. Copy this repository (on GitHub, use it as a template), or copy `scripts/`, `tests/`, `AGENTS.md`, `CLAUDE.md`,
-   `.gitignore` and `.github/` into an empty one. `examples/` can go.
-2. Make the first records:
+Ask your AI agent: **"Set up a ledger from https://github.com/cyi0250/labledger."** It clones this repository into a
+temporary folder and runs `python3 labledger/scripts/labledger.py setup`, which prints what to ask you first, each with
+the answer it recommends on your machine:
 
-   ```bash
-   python3 scripts/labledger.py new area sim "Simulator" --prefix SIM
-   python3 scripts/labledger.py new todo sim "Model the DMA engine" --from user
-   python3 scripts/labledger.py new exp "DMA latency under load" --affects "SIM-001: first numbers"
-   python3 scripts/labledger.py show SIM-001
-   ```
+- **the name** you call the ledger by: `ledger`, unless something on your machine already answers to that. The ledger
+  and its skill carry the name: `scripts/<ledger>.py`, `<ledger>.yml`, commit messages `<ledger>(…)`, and `/<ledger>` in
+  your agents (`$<ledger>` in Codex);
+- **the folder** it goes in, and **the remote** it is pushed to so that other machines share it (a new private GitHub
+  repository without README or license, say), or none;
+- its **time zone** and the **language** its records are written in;
+- **the agents** that get its skill: Claude Code, Codex, OpenCode, Gemini CLI, Copilot, Cursor.
 
-   Each write command commits what it wrote, and pushes it once the branch tracks a remote. On a machine whose host
-   name is `localhost`, first set `LABLEDGER_HOST` to a name for it (AGENTS.md, Other machines).
-3. Point your agent at `AGENTS.md`. Agents that read `AGENTS.md` find it on their own; `CLAUDE.md` imports it for
-   Claude Code.
+The agent then runs setup with your answers. setup makes the ledger, commits and pushes it, turns its hooks on, and
+installs the skill. From then on your agents record their experiments and data, decisions, defects, investigations and
+TODOs as the work produces them, and look up what is recorded before they start. setup runs the same from a terminal. On
+another machine, clone the ledger and run `python3 scripts/<ledger>.py setup` in it.
 
 [`examples/demo`](examples/demo) is a small finished ledger: a TODO settled by an experiment, with the benchmark script,
 its data table, a state table and two decisions.
@@ -46,7 +49,7 @@ areas/<area>/decisions/          decisions of one area (decisions/ holds those a
 experiments/EXP-NNNN.md          an experiment; its files are in experiments/attachments/EXP-NNNN/
 arcs/ARC-NNN.md                  work spanning several TODOs and experiments: a paper, a release
 state/<name>.csv                 the current values, each from a final experiment
-labledger.yml, templates/        the ledger's time zone, commit prefix, body skeletons and words (optional)
+<ledger>.yml, templates/         the ledger's time zone, language, body skeletons and words (optional)
 views/                           tables rendered on each clone (gitignored)
 ```
 

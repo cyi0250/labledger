@@ -873,11 +873,11 @@ def grepo(repo: Path) -> Path:
 
 def test_write_commands_commit_what_they_wrote(grepo: Path, capsys):
     assert run(grepo, "new", "exp", "second experiment", "--summary", "short summary") == 0
-    assert git(grepo, "log", "-1", "--format=%s") == "ledger(exp): open EXP-0002 — second experiment\n"
+    assert git(grepo, "log", "-1", "--format=%s") == "labledger(exp): open EXP-0002 — second experiment\n"
     assert run(grepo, "new", "issue", "lab", "board-hangs", "--symptom", "it hangs") == 0
     assert run(grepo, "resolve", "issue", "board-hangs", "--by", "EXP-0002") == 0
     assert run(grepo, "set", "LAB-001", "--status", "done", "--evidence", "EXP-0002", "--note", "done") == 0
-    assert git(grepo, "log", "-1", "--format=%s") == "ledger(lab): LAB-001 done\n"
+    assert git(grepo, "log", "-1", "--format=%s") == "labledger(lab): LAB-001 done\n"
     assert f"areas/lab/decisions/{TODAY}-close-LAB-001.md" in git(grepo, "show", "--name-only", "--format=", "HEAD"), "the close decision rides along"
     assert git(grepo, "rev-list", "--count", "HEAD") == "5\n"
     assert git(grepo, "status", "--porcelain") == "", "nothing is left behind"
@@ -907,13 +907,13 @@ def test_a_ledger_sets_its_own_words_and_commit_prefix(grepo: Path, capsys):
     assert (grepo / "areas" / "lab" / "decisions" / f"{TODAY}-close-LAB-001.md").read_text(encoding="utf-8").endswith(
         "- done: terminé par EXP-0002 (preuve EXP-0002)\n")
     assert run(grepo, "validate") == 0
-    (grepo / "labledger.yml").write_text("commit_prefix: two words\nlanguage: fr\n", encoding="utf-8")
+    (grepo / "labledger.yml").write_text("commit_prefix: two words\ncolour: blue\n", encoding="utf-8")
     (templates / "labels.yml").write_text("symtom: typo\nclosed_by: fini\n", encoding="utf-8")
     (templates / "issue.md").write_text("x\n", encoding="utf-8")
     capsys.readouterr()
     assert run(grepo, "validate") == 1
     out = capsys.readouterr().out
-    for problem in ("labledger.yml: unknown key `language`", "commit_prefix `two words` must be one word",
+    for problem in ("labledger.yml: unknown key `colour`", "commit_prefix `two words` must be one word",
                     "templates/labels.yml: unknown label `symtom`", "closed_by must hold {evidence}", "templates/issue.md: not a template"):
         assert problem in out, problem
 
@@ -924,7 +924,7 @@ def test_an_unfinished_file_of_another_session_does_not_hold_the_commit_back(gre
     (grepo / "areas" / "lab" / "notes-in-progress.md").write_text("notes — no frontmatter yet\n", encoding="utf-8")
     assert run(grepo, "new", "exp", "second experiment") == 0
     assert "notes-in-progress.md" in capsys.readouterr().out, "the render problem is still reported"
-    assert git(grepo, "log", "-1", "--format=%s") == "ledger(exp): open EXP-0002 — second experiment\n"
+    assert git(grepo, "log", "-1", "--format=%s") == "labledger(exp): open EXP-0002 — second experiment\n"
     assert git(grepo, "status", "--porcelain") == "?? areas/lab/notes-in-progress.md\n", "the note is left to its session"
 
 
@@ -1008,7 +1008,7 @@ def test_a_rejected_push_brings_the_other_servers_commits_in_and_pushes_on_top(g
     out = capsys.readouterr().out
     assert "synced — 1 commit(s) from origin, 1 local commit(s) replayed on top" in out and "pushed" in out
     assert git(origin, "rev-parse", "main") == git(grepo, "rev-parse", "HEAD")
-    assert git(grepo, "log", "--format=%s") == "ledger(exp): open EXP-0002 — local\nanother server\nseed\n", "a straight line"
+    assert git(grepo, "log", "--format=%s") == "labledger(exp): open EXP-0002 — local\nanother server\nseed\n", "a straight line"
     assert (grepo / "note.txt").read_text(encoding="utf-8") == "x\n", "the other server's file arrives in the working tree"
     assert git(grepo, "status", "--porcelain") == ""
 
@@ -1233,7 +1233,7 @@ def test_sync_replays_a_commit_that_lands_while_it_runs(grepo: Path, origin: Pat
 
     monkeypatch.setattr(ll, "_overlap", a_session_commits_meanwhile)
     assert run(grepo, "sync") == 0
-    assert git(grepo, "log", "--format=%s") == ("ledger(exp): open EXP-0003 — during the sync\nledger(exp): open EXP-0002 — first one\n"
+    assert git(grepo, "log", "--format=%s") == ("labledger(exp): open EXP-0003 — during the sync\nlabledger(exp): open EXP-0002 — first one\n"
                                                 "another server\nseed\n")
     assert git(origin, "rev-parse", "main") == git(grepo, "rev-parse", "HEAD") and git(grepo, "status", "--porcelain") == ""
 
@@ -1544,3 +1544,76 @@ def test_fetches_and_pushes_over_ssh_share_one_connection(grepo: Path, tmp_path:
     git(grepo, "remote", "set-url", "origin", str(tmp_path / "origin.git"))
     ll._network_env(grepo, "origin")
     assert len(calls()) == before, "no ssh for a remote that is not reached over SSH, nor for a clone with its own ssh"
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="new ledgers are made in the tool's source repository")
+def test_setup_asks_first_then_makes_a_ledger_under_the_chosen_name_with_a_skill_that_answers_to_it(tmp_path: Path, monkeypatch, capsys):
+    """Without its answers setup only prints the questions, recommending a name nothing on the machine answers to yet and
+    keeping the answers given. It refuses what would break later (a taken name, a remote that is not empty) before it makes
+    anything. Then it makes the ledger under the chosen name, every file carrying it, writes the skill of that name once
+    per skill folder (Claude Code's is a link to the shared one here), and leaves English skeletons to translate for a
+    ledger in another language. The new ledger's own tool runs, reserves its numbers on the remote, and puts its skill
+    on a machine again; a ledger kept on one machine has nothing to sync."""
+    home, shared = tmp_path / "home", tmp_path / "home" / ".agents" / "skills"
+    (shared / "ledger").mkdir(parents=True)
+    (shared / "ledger" / "SKILL.md").write_text("---\nname: ledger\ndescription: another tool\n---\n", encoding="utf-8")
+    (home / ".claude").mkdir()
+    (home / ".claude" / "skills").symlink_to(shared)
+    (home / ".codex").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for var in ("LABNOTES_HOST", "LABSOLO_HOST"):
+        monkeypatch.setenv(var, "test-server")
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@example.org")
+    remote, used, path = tmp_path / "remote.git", tmp_path / "used", tmp_path / "labnotes"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(tmp_path, "init", "-q", "-b", "main", str(used))
+    git(used, "commit", "-q", "--allow-empty", "-m", "someone's work")
+    answers = ["--path", str(path), "--timezone", "Asia/Seoul", "--language", "Korean", "--agents", "claude", "codex"]
+    assert ll.main(["setup"]) == 2
+    out = capsys.readouterr().out
+    assert "recommended: labbook" in out and "taken here: ledger — a skill" in out and "--agents claude codex" in out
+    assert ll.main(["setup", "--name", "labnotes", "--timezone", "Europe/Berlin"]) == 2
+    out = capsys.readouterr().out
+    assert "--name:" not in out and "--name labnotes --path ~/labnotes --remote none --timezone Europe/Berlin" in out, "answers given stay"
+    for name, why in (("ledger", "a skill"), ("json", "a Python module"), ("git", "a command"), ("Notes", "lowercase"),
+                      ("notes", "git's own refs")):
+        assert ll.main(["setup", "--name", name, "--remote", str(remote), *answers]) == 2
+        assert why in capsys.readouterr().err, name
+    assert ll.main(["setup", "--name", "labnotes", "--remote", str(used), *answers]) == 2
+    assert "is not empty" in capsys.readouterr().err
+    assert not path.exists(), "a refused setup makes nothing"
+    refusing = tmp_path / "refusing.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(refusing))
+    (refusing / "hooks" / "pre-receive").write_text("#!/bin/sh\necho 'push refused here' >&2\nexit 1\n", encoding="utf-8")
+    (refusing / "hooks" / "pre-receive").chmod(0o755)
+    assert ll.main(["setup", "--name", "labnotes", "--remote", str(refusing), *answers]) == 1
+    assert "push refused here" in capsys.readouterr().err, "git's own reason is shown"
+    assert not any(path.iterdir()) and not (shared / "labnotes").exists(), "a ledger that could not be pushed is not left half made"
+
+    assert ll.main(["setup", "--name", "labnotes", "--remote", str(remote), *answers]) == 0
+    assert "Translate each templates/<kind>.md" in capsys.readouterr().out
+    assert subprocess.run(["git", "-C", str(path), "grep", "-qi", "labledger"]).returncode == 1, "every file carries the new name"
+    assert git(path, "log", "--format=%s") == "labnotes: start the ledger\n" and git(remote, "rev-parse", "main") == git(path, "rev-parse", "HEAD")
+    tool = path / "scripts" / "labnotes.py"
+    skill = (shared / "labnotes" / "SKILL.md").read_text(encoding="utf-8")
+    assert skill.startswith("---\nname: labnotes\n") and f"python3 {tool} *" in skill and "Write the records in Korean." in skill
+    assert sorted(p.name for p in shared.iterdir()) == ["labnotes", "ledger"], "one skill folder for both agents"
+
+    for argv in (["validate"], ["new", "exp", "first run"]):
+        r = subprocess.run([sys.executable, str(tool), *argv], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+    assert git(path, "log", "-1", "--format=%s") == "labnotes(exp): open EXP-0001 — first run\n"
+    assert git(remote, "for-each-ref", "--format=%(refname)") == "refs/heads/main\nrefs/labnotes/ids\n", "numbers are reserved on the remote"
+    assert subprocess.run([sys.executable, str(tool), "setup"], capture_output=True).returncode == 2, "it asks for the agents first"
+    (shared / "labnotes").rename(tmp_path / "removed")
+    r = subprocess.run([sys.executable, str(tool), "setup", "--agents", "codex"], capture_output=True, text=True)
+    assert r.returncode == 0 and (shared / "labnotes" / "SKILL.md").read_text(encoding="utf-8") == skill, r.stderr
+
+    solo = tmp_path / "labsolo"
+    assert ll.main(["setup", "--name", "labsolo", "--path", str(solo), "--remote", "none", "--timezone", "UTC", "--language", "English",
+                    "--agents", "claude"]) == 0
+    assert not (solo / "templates").exists()
+    r = subprocess.run([sys.executable, str(solo / "scripts" / "labsolo.py"), "sync"], capture_output=True, text=True)
+    assert r.returncode == 0 and "nothing to sync" in r.stdout, r.stdout + r.stderr

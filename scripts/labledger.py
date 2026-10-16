@@ -25,6 +25,7 @@ import contextlib
 import csv
 import datetime as dt
 import fcntl
+import importlib.util
 import io
 import json
 import os
@@ -185,9 +186,10 @@ LABELS = {  # the words the write commands put into record bodies
     "evidence": "evidence", "closed_by": "done by {evidence}",  # the close decision of a TODO
     "in_progress": "(in progress)",  # a new EXP's summary
 }
+NAME = "labledger"  # what this ledger is called: its tool, settings, skill, commit messages, variables and refs carry it
 SETTINGS_FILE = "labledger.yml"  # the ledger's settings: `key: value` lines, every key optional
-SETTINGS_KEYS = ("timezone", "commit_prefix")
-COMMIT_PREFIX = "ledger"  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
+SETTINGS_KEYS = ("timezone", "commit_prefix", "language")
+COMMIT_PREFIX = NAME  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
 TEMPLATES_DIR = "templates"  # <kind>.md replaces a body skeleton (SKELETONS), labels.yml any of the LABELS
 # EXP `state`: `n/a` (a parenthesised note may follow) when the experiment is the source of no state/ row; else the
 # state file names.
@@ -1964,6 +1966,11 @@ def cmd_show(args) -> int:
 
 # ───────────────────────────── new ─────────────────────────────
 
+def no_area(area: str) -> int:
+    print(f"unknown area {area} — `new area {area} \"<title>\" --prefix <PREFIX>` makes it", file=sys.stderr)
+    return 2
+
+
 def cmd_new_area(args) -> int:
     root = args.root
     graph = load_graph(root)
@@ -1995,8 +2002,7 @@ def cmd_new_todo(args) -> int:
     graph = load_graph(root)
     area = args.area
     if area not in graph.areas:
-        print(f"unknown area {area} (areas/{area}/README.md with `type: area` frontmatter)", file=sys.stderr)
-        return 2
+        return no_area(area)
     prefix = args.prefix or graph.areas[area].prefix
     if not prefix:
         print(f"areas/{area}/README.md declares no `prefix`; pass --prefix", file=sys.stderr)
@@ -2157,8 +2163,7 @@ def cmd_new_issue(args) -> int:
     root = args.root
     graph = load_graph(root)
     if args.area not in graph.areas:
-        print(f"unknown area {args.area}", file=sys.stderr)
-        return 2
+        return no_area(args.area)
     slug = args.slug
     if not SLUG_RE.match(slug):
         print(f"slug `{slug}` must be kebab-case [A-Za-z0-9._-]", file=sys.stderr)
@@ -2265,8 +2270,7 @@ def cmd_new_decision(args) -> int:
         print(f"dec:{dec_id} already exists", file=sys.stderr)
         return 2
     if args.area and args.area not in graph.areas:
-        print(f"unknown area {args.area}", file=sys.stderr)
-        return 2
+        return no_area(args.area)
     path = (root / "areas" / args.area if args.area else root) / DEC_DIR / f"{dec_id}.md"
     if path.exists():
         print(f"{path.relative_to(root).as_posix()} already exists", file=sys.stderr)
@@ -2288,8 +2292,7 @@ def cmd_new_inv(args) -> int:
     root = args.root
     graph = load_graph(root)
     if args.area not in graph.areas:
-        print(f"unknown area {args.area}", file=sys.stderr)
-        return 2
+        return no_area(args.area)
     date = args.date or record_today(args.root)
     if not DATE_RE.match(date):
         print("--date must be YYYY-MM-DD", file=sys.stderr)
@@ -2999,7 +3002,7 @@ def sync(root: Path, push: bool = True, attempts: int = 3) -> tuple[bool, str]:
         return False, f"not synced — {blocker}"
     up = _upstream(root)
     if up is None:
-        return False, "not synced — this branch tracks no upstream (`git branch -u origin/main`)"
+        return True, "nothing to sync — this branch tracks no upstream (a ledger shared with other machines tracks one: `git branch -u origin/main`)"
     remote, merge, tracking = up
     lock = _lock_sync(_sync_paths(root)[2])
     if lock is None:
@@ -3323,6 +3326,279 @@ def cmd_attachments(args) -> int:
     return 0
 
 
+# ───────────────────────────── setup ─────────────────────────────
+
+SOURCE_NAME = "lab" "ledger"  # the name in the tool's source files, which setup replaces in a new ledger (split so the replacing skips it)
+NAME_RE = re.compile(r"^[a-z][a-z0-9]{1,31}$")  # a file name, a Python module, a skill name and, in capitals, a variable prefix
+NAME_CHOICES = ("ledger", "labbook", "logbook", "worklog")  # setup recommends the first one nothing on the machine answers to
+GIT_REF_SPACES = ("heads", "tags", "remotes", "notes", "replace", "stash", "bisect", "prefetch", "rewritten", "worktree")
+LEDGER_FILES = ("scripts/labledger.py", "scripts/hooks/pre-commit", "scripts/hooks/pre-push", "tests/test_labledger.py",
+                ".github/workflows/validate.yml", "AGENTS.md", "CLAUDE.md", ".gitignore")  # what a new ledger is made of
+AGENT_SKILLS = {  # agent: a folder of its user's skills it reads, and the folder that is there once the agent is installed
+    "claude": ("~/.claude/skills", "~/.claude"),  # Claude Code reads its own folder only
+    "codex": ("~/.agents/skills", "~/.codex"),  # the others all read the shared one
+    "opencode": ("~/.agents/skills", "~/.config/opencode"),
+    "gemini": ("~/.agents/skills", "~/.gemini"),
+    "copilot": ("~/.agents/skills", "~/.copilot"),
+    "cursor": ("~/.agents/skills", "~/.cursor"),
+}
+SKILL = """---
+name: labledger
+description: Records the user's work in `labledger`, their git ledger of plans, experiments, decisions and observations. Use when the user mentions `labledger` or one of its records (EXP-0042, a TODO ID, issue:<slug>, dec:<date>-<slug>); when a run, benchmark or test produced numbers worth keeping; when something was decided; when a defect, a surprise or an open question turned up; when work is left for a later session; and before starting work `labledger` may already hold.
+allowed-tools: Bash(python3 {root}/scripts/labledger.py *)
+metadata:
+  ledger-root: {root}
+---
+
+# The ledger `labledger`
+
+`labledger` is the git repository `{root}`: one Markdown file per record, written and checked by its tool. Every
+command below runs as `python3 {root}/scripts/labledger.py <command>`. A write command commits what it wrote, and pushes
+it when the ledger has a remote; the user set the ledger up that way, so record without asking. The rulebook is
+`{root}/AGENTS.md`: read it before the first write of a session.{language}
+
+## Look first
+
+1. Once per session, `sync` takes in what other sessions and machines wrote.
+2. `find <keywords> [--body]` and `show <ID>` find what is recorded already. A follow-up on a question already recorded
+   goes into that record (more runs into the same experiment, more findings into the same issue), and a new record
+   names the records it builds on.
+
+## Record what happened
+
+| What happened | Command |
+|---|---|
+| a run produced numbers | `new exp "<title>"`; its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
+| something was decided | `new decision <slug> --text "…" --why "…" [--area <area>]` |
+| a defect, a surprise or an open question | `new issue <area> <slug> --symptom "…" [--path "…" --hypothesis "…"]` |
+| an investigation, review or design | `new inv <area> "<title>"`, then the body, then `set inv:<name> --status concluded --summary "…"` |
+| work for later | `new todo <area> "<title>" --from <where it came from>` |
+| work finished | `set <ID> --status done --evidence EXP-NNNN --note "…"` |
+| an issue settled | `resolve issue <slug> --by <EXP-NNNN, a commit, inv:<name>>` |
+| no area fits | `new area <id> "<title>" --prefix <PREFIX>` |
+| the user asks what needs attention | `review`, then judge each item as its group says |
+
+A body is edited in place, then committed with `commit -m "{prefix}(<scope>): <what>" <ID> …`, its scope the area,
+`exp`, `arc` or `decisions`. AGENTS.md, "What goes where", has every case.
+
+## Others write here too
+
+- A record's number comes from `new`, never from a file name of your own.
+- Other sessions write in the same folder at the same time. Commit through the tool only:
+  `git add -A`, `git commit -a`, `git pull`, `git rebase`, `git stash`, `--no-verify` and `git push --force` take in
+  or rewrite their work.
+- `validate` passes before the turn ends.
+"""
+QUESTIONS = (  # what setup asks before it makes a ledger, in order
+    ("name", "what the user calls the ledger. Their agents' skill answers to it (/<name>, $<name> in Codex), and the tool "
+             "(scripts/<name>.py), its settings (<name>.yml), its commit messages and variables carry it: 2 to 32 "
+             "lowercase letters and digits starting with a letter, not a common word the user says about other things, "
+             "and not the name of an agent's own command (review, init, …)"),
+    ("path", "a new or empty folder for the ledger's git repository"),
+    ("remote", "an empty git repository the ledger is pushed to, so that other machines share it and numbers are reserved "
+               "there: a new private GitHub repository without README or license, or one made with `git init --bare -b main`; "
+               "or none to keep the ledger on this machine"),
+    ("timezone", "the time zone of the day every record is stamped with, the same on every machine"),
+    ("language", "the language the agents write the records in"),
+    ("agents", f"which agents get the skill ({', '.join(AGENT_SKILLS)})"),
+)
+
+
+def renamed(text: str, name: str) -> str:
+    """The source's text as the ledger `name` carries it: every name, variable and ref follows the new name."""
+    return text.replace(SOURCE_NAME, name).replace(SOURCE_NAME.upper(), name.upper())
+
+
+def machine_timezone() -> str:
+    """This machine's IANA time zone (TZ, /etc/timezone, the target of /etc/localtime), or UTC."""
+    names = [os.environ.get("TZ", "").lstrip(":")]
+    with contextlib.suppress(OSError):
+        names.append(Path("/etc/timezone").read_text(encoding="utf-8").strip())
+    with contextlib.suppress(OSError):
+        names.append(os.readlink("/etc/localtime").partition("zoneinfo/")[2])
+    for name in filter(None, names):
+        with contextlib.suppress(ZoneInfoNotFoundError, ValueError):
+            ZoneInfo(name)
+            return name
+    return "UTC"
+
+
+def skill_dirs(agents) -> dict[Path, list[str]]:
+    """The skill folders to write for `agents`, each once: two agents may read one folder through a link."""
+    dirs: dict[Path, list[str]] = {}
+    for agent in agents:
+        dirs.setdefault(Path(AGENT_SKILLS[agent][0]).expanduser().resolve(), []).append(agent)
+    return dirs
+
+
+def skill_root(folder: Path) -> Path | None:
+    """The ledger a skill folder belongs to, when setup wrote it: the `ledger-root` of its SKILL.md."""
+    with contextlib.suppress(OSError):
+        m = re.search(r"^  ledger-root: (.+)$", (folder / "SKILL.md").read_text(encoding="utf-8"), re.M)
+        return Path(m.group(1)) if m else None
+    return None
+
+
+def skills_taken(name: str, dirs, root: Path | None) -> list[str]:
+    """The skills called `name` in `dirs` that are not the skill of the ledger at `root` (every one, for a new ledger)."""
+    return [f"a skill ({d / name})" for d in dirs if (d / name).exists() and (root is None or skill_root(d / name) != root)]
+
+
+def name_taken(name: str, dirs) -> list[str]:
+    """What already answers to `name` on this machine, which a new ledger called so would be mistaken for."""
+    if not NAME_RE.match(name):
+        return ["not 2 to 32 lowercase letters and digits starting with a letter"]
+    out = skills_taken(name, dirs, None)
+    if name in GIT_REF_SPACES:
+        out.append(f"a namespace of git's own refs: the number counter refs/{name}/ids would land in it")
+    spec = importlib.util.find_spec(name)
+    if spec is not None and Path(spec.origin or name).resolve() != Path(__file__).resolve():
+        out.append(f"a Python module ({spec.origin}): scripts/{name}.py would hide it from the tool")
+    if shutil.which(name):
+        out.append(f"a command ({shutil.which(name)})")
+    return out
+
+
+def remote_problem(remote: str) -> str | None:
+    """Why a new ledger cannot be pushed to `remote`: it is not reached, or it holds something already."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=15")
+    try:
+        r = subprocess.run(["git", "ls-remote", remote], capture_output=True, encoding="utf-8", env=env, timeout=PUSH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return f"the remote {remote} did not answer within {PUSH_TIMEOUT} s"
+    if r.returncode:
+        return f"the remote {remote} cannot be reached — {(r.stderr or r.stdout).strip()}"
+    if r.stdout.strip():
+        return (f"the remote {remote} is not empty — a new ledger goes into a new empty repository (on GitHub: without "
+                "README, license or .gitignore)")
+    return None
+
+
+def make_ledger(path: Path, name: str, timezone: str, language: str, remote: str | None) -> None:
+    """Make the ledger `name` in the empty folder `path` from the tool's source files, every name in them replaced, commit
+    it, and push it to `remote` when there is one. A ledger in another language than English gets the skeletons and
+    words in English under templates/, to translate. CommitError when git refuses."""
+    files = []
+
+    def write(rel: str, text: str) -> Path:
+        files.append(rel)
+        (path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path / rel).write_text(text, encoding="utf-8")
+        return path / rel
+
+    for rel in LEDGER_FILES:
+        shutil.copymode(ROOT / rel, write(renamed(rel, name), renamed((ROOT / rel).read_text(encoding="utf-8"), name)))
+    write(f"{name}.yml", f"timezone: {timezone}\nlanguage: {language}\n")
+    if language.lower() not in ("english", "en"):
+        for kind, text in SKELETONS.items():
+            write(f"{TEMPLATES_DIR}/{kind}.md", renamed(text, name))
+        write(f"{TEMPLATES_DIR}/labels.yml", "".join(f"{k}: {json.dumps(v, ensure_ascii=False)}\n" for k, v in LABELS.items()))
+    _git(path, "init", "-q", "-b", "main")
+    _git(path, "add", "--", *files)
+    _git(path, "commit", "-q", "-m", f"{name}: start the ledger")
+    print(f"made the ledger {name} in {path}: scripts/{name}.py, {name}.yml, AGENTS.md, the hooks, the tests and CI")
+    if remote:
+        _git(path, "remote", "add", "origin", remote)
+        try:  # before the hooks are on: the first push would run the test suite of a tool copied as it is
+            r = _run(path, "push", "-q", "-u", "origin", "main", env=_network_env(path, "origin"), timeout=PUSH_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise CommitError(f"git push: {remote} did not answer within {PUSH_TIMEOUT} s")
+        if r.returncode:
+            raise CommitError(f"git push to {remote}: {(r.stderr + r.stdout).strip()}")
+        print(f"pushed main to {remote}")
+    ensure_hooks(path)
+
+
+def install_skill(root: Path, name: str, language: str | None, prefix: str, dirs: dict[Path, list[str]]) -> list[str]:
+    """Write the skill `name` of the ledger at `root` into each skill folder; returns where it went."""
+    text = (renamed(SKILL, name).replace("{root}", str(root)).replace("{prefix}", prefix)
+            .replace("{language}", f" Write the records in {language}." if language else ""))
+    out = []
+    for d, agents in dirs.items():
+        (d / name).mkdir(parents=True, exist_ok=True)
+        (d / name / "SKILL.md").write_text(text, encoding="utf-8")
+        out.append(f"{d / name / 'SKILL.md'} ({', '.join(agents)})")
+    return out
+
+
+def cmd_setup(args) -> int:
+    """Without the answers it needs, setup prints the questions to ask the user and does nothing else: the agent that
+    runs it asks, then runs it again with the answers."""
+    found = [a for a, (_, home) in AGENT_SKILLS.items() if Path(home).expanduser().is_dir()]
+    tool = f"python3 {Path(__file__).resolve()} setup"
+    if NAME != SOURCE_NAME:  # a ledger's own tool: put the skill of its ledger on this machine
+        if not args.agents:
+            print(f"nothing set up yet — ask the user which agents on this machine get the skill `{NAME}`, which lets them "
+                  f"record in {ROOT} on their own (agents: {', '.join(AGENT_SKILLS)}; found here: {', '.join(found) or 'none'}), "
+                  f"then run:\n  {tool} --agents {' '.join(found or AGENT_SKILLS)}")
+            return 2
+        dirs = skill_dirs(args.agents)
+        taken = skills_taken(NAME, dirs, ROOT)
+        if taken:
+            print(f"not installed — `{NAME}` is already {'; '.join(taken)}", file=sys.stderr)
+            return 2
+        ledger = settings(ROOT)
+        print(f"installed the skill {NAME}:", *install_skill(ROOT, NAME, ledger.get("language"), ledger.get("commit_prefix") or NAME,
+                                                             dirs), sep="\n  ")
+        return 0
+    every = skill_dirs(AGENT_SKILLS)
+    answers = {"name": args.name, "path": args.path, "remote": args.remote, "timezone": args.timezone,
+               "language": args.language, "agents": " ".join(args.agents) if args.agents else None}
+    if None in answers.values():
+        taken = {n: name_taken(n, every) for n in dict.fromkeys((args.name, *NAME_CHOICES)) if n}
+        free = next((n for n in NAME_CHOICES if not taken[n]), None)
+        name = args.name or free or "<name>"
+        recommended = {"name": name, "path": f"~/{name}", "remote": "none", "timezone": machine_timezone(), "language": "English",
+                       "agents": " ".join(found or AGENT_SKILLS)}
+        print("nothing set up yet — ask the user each question, leading with the recommended answer, then run setup with the answers:")
+        for n, (key, what) in enumerate(((k, w) for k, w in QUESTIONS if answers[k] is None), 1):
+            note = {"name": "" if free else f" (none of {', '.join(NAME_CHOICES)} is free here: ask for another)",
+                    "timezone": " (this machine's)", "agents": " (found here)" if found else ""}.get(key, "")
+            print(f"{n}. --{key}: {what}\n   recommended: {recommended[key]}{note}")
+            if key == "name":
+                for other, why in taken.items():
+                    if why:
+                        print(f"   taken here: {other} — {'; '.join(why)}")
+        if answers["name"] and taken[answers["name"]]:
+            print(f"the name `{answers['name']}` is taken here — {'; '.join(taken[answers['name']])}")
+        print(f"\n  {tool} " + " ".join(f"--{k} {answers[k] if answers[k] is not None else recommended[k]}" for k in answers))
+        return 2
+    path = args.path.expanduser().resolve()
+    problems = [f"name `{args.name}` is {why}" for why in name_taken(args.name, every)]
+    if path.exists() and (not path.is_dir() or any(path.iterdir())):
+        problems.append(f"{path} is not an empty folder — to put an existing ledger's skill on this machine, run that "
+                        f"ledger's own setup: python3 {path}/scripts/<name>.py setup")
+    try:
+        ZoneInfo(args.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        problems.append(f"time zone `{args.timezone}` is not an IANA name this machine knows (like Europe/Berlin)")
+    remote = None if args.remote == "none" else args.remote
+    if remote and not problems:
+        problems += filter(None, [remote_problem(remote)])
+    if problems:
+        print("nothing set up —", *problems, sep="\n  ", file=sys.stderr)
+        return 2
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        make_ledger(path, args.name, args.timezone, args.language, remote)
+    except CommitError as exc:
+        for made in path.iterdir():  # the folder was empty: a setup that failed leaves nothing behind to clear
+            shutil.rmtree(made) if made.is_dir() else made.unlink()
+        print(f"nothing set up — {exc}\n  fix that and run setup again", file=sys.stderr)
+        return 1
+    print(f"installed the skill {args.name}:", *install_skill(path, args.name, args.language, args.name, skill_dirs(args.agents)),
+          sep="\n  ")
+    if (path / TEMPLATES_DIR).is_dir():
+        print(f"next: new records start from the English skeletons in {TEMPLATES_DIR}/. Translate each {TEMPLATES_DIR}/<kind>.md "
+              f"and the values in {TEMPLATES_DIR}/labels.yml into {args.language} (keep the keys and {{evidence}}), then commit "
+              f"them: python3 {path}/scripts/{args.name}.py commit -m \"{args.name}(templates): skeletons in {args.language}\" "
+              f"{TEMPLATES_DIR}")
+    print(f"agents record in it on their own from their next session; on another machine, clone it and run "
+          f"`python3 scripts/{args.name}.py setup` there")
+    return 0
+
+
 # ───────────────────────────── main ─────────────────────────────
 
 def main(argv: list[str]) -> int:
@@ -3434,6 +3710,15 @@ def main(argv: list[str]) -> int:
     msg = p.add_mutually_exclusive_group(required=True)
     msg.add_argument("-m", "--message", help="the commit message (`<prefix>(<area>): <what>`; a body after a blank line)")
     msg.add_argument("-F", "--file", help="a file holding the commit message")
+    p = sub.add_parser("setup", help="make a new ledger (in the tool's source repository), or put this ledger's skill on this machine; "
+                                     "without its answers it prints the questions to ask the user")
+    p.set_defaults(func=cmd_setup)
+    p.add_argument("--name", help="a new ledger: what it is called")
+    p.add_argument("--path", type=Path, help="a new ledger: the new or empty folder it goes in")
+    p.add_argument("--remote", help="a new ledger: the empty git repository it is pushed to, or none")
+    p.add_argument("--timezone", help="a new ledger: the IANA time zone of its dates, like Europe/Berlin")
+    p.add_argument("--language", help="a new ledger: the language its records are written in")
+    p.add_argument("--agents", nargs="+", choices=tuple(AGENT_SKILLS), help="the agents on this machine that get the skill")
     p = sub.add_parser("hook", help="run by the git hooks: pre-commit validates the index to commit, pre-push the tips to push")
     p.set_defaults(func=cmd_hook)
     p.add_argument("name", choices=("pre-commit", "pre-push"))
