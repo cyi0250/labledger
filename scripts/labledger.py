@@ -1745,6 +1745,11 @@ def tree_problems(root: Path, committed: bool = False, tracked: set[str] | None 
 def cmd_validate(args) -> int:
     root = args.root
     graph, problems = tree_problems(root, committed=args.committed)
+    if args.json:
+        counts = {"todo": len(graph.todos), "exp": len(graph.exps), "arc": len(graph.arcs), "inv": len(graph.invs), "area": len(graph.areas)}
+        stale = [] if args.committed or problems else [line.strip("- ") for line in stale_view_lines(graph, root)]
+        print(json.dumps({"ok": not problems, "problems": problems, "counts": counts, "stale_views": stale}, ensure_ascii=False))
+        return 1 if problems else 0
     if problems:
         print("validation failed:")
         for p in problems:
@@ -1846,6 +1851,18 @@ def cmd_review(args) -> int:
               f"(`resolve issue <slug> --by <TODO>`)", ""]
     for i, todos in promoted_closed:
         lines.append(f"- `{i.slug}` — " + ", ".join(f"{t.id} {t.fm['status']}" for t in todos))
+    if args.json:
+        groups = [("open TODOs with records newer than their updated", [t.id for t, _ in unabsorbed]),
+                  (f"open TODOs unchanged for {STALE_DAYS} days", [t.id for t in stale]),
+                  (f"open issues whose body holds the word {word}", [f"issue:{i.slug}" for i in self_resolved]),
+                  ("active arcs whose members have all stopped", [a.id for a, _ in arc_stale]),
+                  (f"experiments in flight for more than {STALE_EXP_DAYS} days", [e.id for e in in_flight]),
+                  (f"open issues and investigations not updated for {STALE_OPEN_DAYS} days", [a for a, _, _ in old_open]),
+                  ("done arcs with open members", [a.id for a, _ in done_open]),
+                  ("promoted issues whose TODOs are all closed", [f"issue:{i.slug}" for i, _ in promoted_closed])]
+        print(json.dumps({"today": today.isoformat(), "groups": [{"group": n, "title": title, "items": items}
+                                                                 for n, (title, items) in enumerate(groups, 1)]}, ensure_ascii=False))
+        return 0
     text = "\n".join(lines) + "\n"
     (root / VIEWS).mkdir(exist_ok=True)
     (root / VIEWS / "review.md").write_text(text, encoding="utf-8")
@@ -1983,6 +2000,24 @@ SHOW = {"area": show_area, "todo": show_todo, "exp": show_exp, "arc": show_arc, 
         "dec": show_decision, "issue": show_issue}
 
 
+def show_json(graph: Graph, kind: str, r) -> dict:
+    """What `show` prints, as data: the record's head and body, and what the tool computes about it."""
+    address = {"inv": f"inv:{getattr(r, 'id', '')}", "dec": f"dec:{getattr(r, 'id', '')}", "issue": f"issue:{getattr(r, 'slug', '')}"}.get(
+        kind, getattr(r, "id", ""))
+    out = {"address": address, "kind": kind, "file": getattr(r, "rel", "") or getattr(r, "file", ""), "head": r.fm,
+           "body": r.text if kind in ("dec", "issue") else r.body.strip("\n")}
+    if kind == "todo":
+        out["inbound"] = [{"date": m.date, "source": m.source, "kind": m.kind, "text": m.text} for m in inbound_for(graph, r)]
+    if kind in ("todo", "exp"):
+        out["arcs"] = [a.id for a in graph.arcs_of(r.id)]
+    if kind == "arc":
+        out["members"], out["exps"] = list(graph.member_ids(r)), list(graph.exp_ids(r))
+    if kind == "area":
+        out["todos"] = [t.id for t in graph.todo_order() if t.area == r.id]
+        out["invs"] = [f"inv:{i.id}" for i in graph.inv_order() if i.area == r.id]
+    return out
+
+
 def cmd_show(args) -> int:
     graph = load_graph(args.root)
     found = resolve_address(graph, args.id)
@@ -1991,6 +2026,9 @@ def cmd_show(args) -> int:
               file=sys.stderr)
         return 2
     kind, record = found
+    if args.json:
+        print(json.dumps(show_json(graph, kind, record), ensure_ascii=False))
+        return 0
     SHOW[kind](graph, record)
     return 0
 
@@ -2194,6 +2232,11 @@ def cmd_find(args) -> int:
     if args.status:
         rows = [r for r in rows if r[3] in args.status]
     rows.sort(key=lambda r: (r[0], r[2]), reverse=True)
+    if args.json:
+        print(json.dumps({"matches": [{"address": a, "kind": k, "status": st, "date": d, "text": _oneline(line, 300)}
+                                      for d, k, a, st, line in rows[:args.limit]], "more": max(0, len(rows) - args.limit)},
+                         ensure_ascii=False))
+        return 0 if rows else 1
     for date, _, address, status, line in rows[:args.limit]:
         print(f"{address} · {status} · {date} · {_oneline(line)}")
     if len(rows) > args.limit:
@@ -3328,11 +3371,24 @@ def autocommit(args, rels: list[str], subject: str, body: str = "") -> bool:
     return pushed
 
 
+def address_of(rel: str) -> str:
+    """The address of the record in file `rel`."""
+    path = PurePosixPath(rel)
+    if path.parts[0] in ("experiments", "arcs") or TODO_FILE_RE.match(path.name):
+        return path.stem
+    if path.parts[0] == DEC_DIR or path.parent.name == DEC_DIR:
+        return f"dec:{path.stem}"
+    if path.parent.name == ISSUE_DIR:
+        return f"issue:{path.stem}"
+    return path.parts[1] if path.name == "README.md" else f"inv:{path.stem}"
+
+
 def written(args, rels: list[str], subject: str, body: str = "") -> int:
     """How every write command ends: render, then commit what it wrote. A file the render cannot read (another
     session's unfinished note, say) stops the views but not the commit: the commit carries `rels` only and is
     validated on its own tree. The record is written either way: a write left uncommitted or unpushed ends with
     UNFINISHED, never the failure of a refusal, since a rerun would write a second record."""
+    args.written = rels[0]
     if run_render(args.root, check=False):
         print(f"{VIEWS}/ are not re-rendered until those are fixed; the record is written")
     return 0 if autocommit(args, rels, subject, body) else UNFINISHED
@@ -3730,6 +3786,7 @@ def main(argv: list[str]) -> int:
     parser = command(prog="labledger.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)
     p = sub.add_parser("validate", help="check every record and the rules between them"); p.set_defaults(func=cmd_validate)
+    p.add_argument("--json", action="store_true", help="one JSON object: ok, problems, counts, stale views")
     p.add_argument("--committed", action="store_true",
                    help="the tree is a commit's checkout (hooks, CI): views/ must be absent, and stale views are not reported")
     p = sub.add_parser("render", help="rebuild the tables in views/"); p.add_argument("--check", action="store_true"); p.set_defaults(func=cmd_render)
@@ -3739,7 +3796,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("ids", nargs="+", metavar="EXP-NNNN"); p.set_defaults(func=cmd_attachments)
     p = sub.add_parser("fmt", help="rewrite record heads (frontmatter, H1) in canonical form"); p.add_argument("--check", action="store_true"); p.set_defaults(func=cmd_fmt)
     p = sub.add_parser("review", help="the queue of records whose status needs judging"); p.add_argument("--today"); p.set_defaults(func=cmd_review)
+    p.add_argument("--json", action="store_true", help="one JSON object: each group's addresses (views/review.md is not written)")
     p = sub.add_parser("show", help="a record with its links and inbound records"); p.add_argument("id"); p.set_defaults(func=cmd_show)
+    p.add_argument("--json", action="store_true", help="one JSON object: head, body, and what the tool computes about it")
     p = sub.add_parser("new", help="start a record"); kind = p.add_subparsers(dest="kind", required=True, parser_class=command)
     ar = kind.add_parser("area", help="areas/<id>/README.md: an area of work whose TODOs are numbered <prefix>-NNN"); ar.set_defaults(func=cmd_new_area)
     ar.add_argument("id", help="the folder name: lowercase letters, digits and dashes"); ar.add_argument("title")
@@ -3785,12 +3844,15 @@ def main(argv: list[str]) -> int:
     v.add_argument("--date", help="default: today"); v.add_argument("--summary")
     v.add_argument("--status", default="open", choices=INV_STATUSES)
     v.add_argument("--affects", nargs="*", help='the TODOs and issues it updates: "ID: note" or "issue:<slug>: note"')
+    for made in (ar, t, e, a, i, d, v):
+        made.add_argument("--json", action="store_true", help="print the record made as one JSON line on stdout; the rest goes to stderr")
     p = sub.add_parser("find", help="find records by keyword"); p.set_defaults(func=cmd_find)
     p.add_argument("words", nargs="+", help="keywords that must all appear (case-insensitive)")
     p.add_argument("--kind", nargs="*", choices=("todo", "exp", "arc", "inv", "issue", "dec"))
     p.add_argument("--status", nargs="*", help="status filter (issues: open, promoted, resolved)")
     p.add_argument("--body", action="store_true", help="search the bodies too")
     p.add_argument("--limit", type=int, default=FIND_LIMIT)
+    p.add_argument("--json", action="store_true", help="one JSON object: the matches and how many more there are")
     p = sub.add_parser("resolve", help="mark an issue resolved, with a line saying what resolved it (from open or promoted)")
     rk = p.add_subparsers(dest="kind", required=True, parser_class=command)
     r = rk.add_parser("issue"); r.set_defaults(func=cmd_resolve_issue); r.add_argument("slug")
@@ -3835,8 +3897,14 @@ def main(argv: list[str]) -> int:
     p.set_defaults(func=cmd_hook)
     p.add_argument("name", choices=("pre-commit", "pre-push"))
     p.add_argument("hook_args", nargs="*", help="what git passes (pre-push: the remote's name and URL)")
-    args = parser.parse_args(argv, argparse.Namespace(root=ROOT, no_commit=False, no_push=False, offline=False))
+    args = parser.parse_args(argv, argparse.Namespace(root=ROOT, no_commit=False, no_push=False, offline=False, json=False))
     args.root = args.root.resolve()
+    if args.json and args.cmd == "new":  # stdout holds the record made, as one JSON line; what is said along the way goes to stderr
+        with contextlib.redirect_stdout(sys.stderr):
+            rc = args.func(args)
+        made = getattr(args, "written", None)
+        print(json.dumps({"address": address_of(made), "file": made, "exit": rc} if made else {"exit": rc}, ensure_ascii=False))
+        return rc
     return args.func(args)
 
 

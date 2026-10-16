@@ -190,6 +190,11 @@ Every command ends with one of four exit codes, and says what went wrong on stde
 | 2 | nothing was written: a usage error, a rule the record would break, an unknown address |
 | 3 | the record is written but not committed, or committed but not pushed: do not run the command again, which would write a second record; `commit` it, or let `sync` push it |
 
+`find`, `show`, `review` and `validate` take `--json` and print one JSON object instead of text: the matches; a record's
+head and body with what the tool computes about it (a TODO's inbound records, an arc's members); each review group's
+addresses (without writing `views/review.md`); the verdict, the problems and the record counts. `new … --json` prints
+the record it made as `{"address", "file", "exit"}` and sends everything else to stderr.
+
 1. **The agent empties the review queue**, recording each judgment as its group says ([Review queue](#review-queue)).
 2. **An experiment starts with `new exp`** and ends with `set EXP-NNNN --status final --summary … --data …`, adding
    `--affects` and `--state` when they apply. When a current value changed, its row in `state/` is edited in the same

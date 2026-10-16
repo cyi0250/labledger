@@ -667,6 +667,25 @@ def test_a_refusal_says_how_to_fix_it(repo: Path, capsys):
     assert run(repo, "fmt", "--check") == 1 and "LAB-001.md: line 7 is `priority:  P1`" in capsys.readouterr().out
 
 
+def test_json_output_is_the_whole_of_stdout(repo: Path, capsys):
+    """With --json a command prints one JSON object and nothing else on stdout, so an agent parses it instead of reading
+    prose: validate's verdict, find's matches, a record with what the tool computes about it, the review queue's
+    addresses, and the record a write made (what it said along the way goes to stderr)."""
+    def output(*argv: str, rc: int = 0) -> dict:
+        assert run(repo, *argv, "--json") == rc, argv
+        return json.loads(capsys.readouterr().out)
+
+    assert output("validate") == {"ok": True, "problems": [], "counts": {"todo": 1, "exp": 1, "arc": 1, "inv": 1, "area": 1},
+                                  "stale_views": []}
+    assert [m["address"] for m in output("find", "first")["matches"]] == ["LAB-001", "EXP-0001", "ARC-001"]
+    todo = output("show", "LAB-001")
+    assert todo["head"]["status"] == "planned" and "EXP-0001" in {m["source"] for m in todo["inbound"]} and todo["arcs"] == ["ARC-001"]
+    assert [g["group"] for g in output("review")["groups"]] == list(range(1, 9))
+    assert output("new", "exp", "second") == {"address": "EXP-0002", "file": "experiments/EXP-0002.md", "exit": 0}
+    assert output("new", "exp", "refused", "--affects", "NOPE-001", rc=2) == {"exit": 2}
+    assert output("new", "issue", "lab", "slow-boot", "--symptom", "boots slowly")["address"] == "issue:slow-boot"
+
+
 def test_check_node_is_the_rule_set_validate_uses(repo: Path):
     graph = ll.load_graph(repo)
     for kind in ll.NODE_TABLES:
