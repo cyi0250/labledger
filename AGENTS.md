@@ -42,8 +42,8 @@ validate checks every record and the folders they live in:
   value as its kind says; each required key is filled. The head is exactly what `fmt` writes: keys in the order above,
   values quoted the same way, and for todo, exp, arc and area the line `# ID — title` after it.
 - **Values.** Each status comes from its kind's list; `priority` is `P0`, `P1` or `P2`; dates are `YYYY-MM-DD`;
-  `updated` is never before `created`, or before `date` for an inv or an issue. `summary` and `status_note` hold at
-  most 300 characters: what the record found, or why its status is what it is. `host` is a host name, and an area's
+  `updated` is never before `created`, or before `date` for an inv or an issue. `summary` holds at most 500 characters:
+  what the record found; `status_note` at most 300: why its status is what it is. `host` is a host name, and an area's
   `order` a whole number.
 - **Names.** Every TODO ID, inv name, `dec:` address and `issue:` address is used once. A decision's file name is its
   date and its title with dashes for spaces. Issue slugs, and decision titles apart from their spaces, use only

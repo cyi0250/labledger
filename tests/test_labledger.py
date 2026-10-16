@@ -628,7 +628,7 @@ def test_write_commands_refuse_records_that_would_not_validate(repo: Path, capsy
         ("new", "exp", "x", "--host", "a/b"),
         ("set", "ARC-001", "--status", "parked"),
         ("set", "inv:review-2026-09-03", "--affects", "NOPE-001: note"),
-        ("set", "LAB-001", "--note", "x" * (ll.SUMMARY_MAX + 1)),
+        ("set", "LAB-001", "--note", "x" * (ll.STATUS_NOTE_MAX + 1)),
         ("set", "EXP-0001", "--status", "final"),
         ("set", "issue:seed-issue-lab", "--note", "x"),
         ("set", "issue:seed-issue-lab", "--date", "2026-08-31"),
@@ -638,6 +638,7 @@ def test_write_commands_refuse_records_that_would_not_validate(repo: Path, capsy
         capsys.readouterr()
     assert {p: p.read_bytes() for p in repo.rglob("*.md")} == snapshot, "a refused write must not touch any file"
     assert run(repo, "validate") == 0
+    assert run(repo, "set", "EXP-0001", "--summary", "x" * ll.SUMMARY_MAX) == 0, "a summary may run longer than a status note"
     assert set(ll.SET_OPTIONS) == {"status", "note", "priority", "evidence", "affects", "summary", "state", "data", "superseded_by",
                                    "host", "model", "commit"}
 

@@ -62,7 +62,8 @@ PRIORITIES = ("P0", "P1", "P2")
 EXP_STATUSES = ("in_flight", "final", "withdrawn", "superseded")
 ARC_STATUSES = ("active", "done", "parked")
 INV_STATUSES = ("open", "concluded")
-SUMMARY_MAX = 300
+SUMMARY_MAX = 500  # an EXP's or inv's summary: what it found
+STATUS_NOTE_MAX = 300  # a status_note: why the record's status is what it is
 INBOUND_MAX_ROWS = 40
 SHOW_BODY_MAX_LINES = 80
 ACTIVE_EXP_ROWS = 6
@@ -1538,8 +1539,8 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
     if kind == "inv" and "updated" in fm and str(fm["updated"]) < str(fm.get("date", "")):
         out.append(f"{rel}: updated < date")
     status, note = fm.get("status"), fm.get("status_note")
-    if note and len(str(note)) > SUMMARY_MAX:
-        out.append(f"{rel}: status_note longer than {SUMMARY_MAX} chars — say why the status is what it is; the results stay in their records")
+    if note and len(str(note)) > STATUS_NOTE_MAX:
+        out.append(f"{rel}: status_note longer than {STATUS_NOTE_MAX} chars — say why the status is what it is; the results stay in their records")
     if kind == "todo":
         if fm.get("priority") not in PRIORITIES:
             out.append(f"{rel}: priority `{fm.get('priority')}` not in {PRIORITIES}")
