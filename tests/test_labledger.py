@@ -1754,52 +1754,143 @@ def test_setup_asks_first_then_makes_a_ledger_under_the_chosen_name_with_a_skill
     assert r.returncode == 0 and "nothing to sync" in r.stdout, r.stdout + r.stderr
 
 
-@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
-def test_an_update_brings_a_ledger_up_to_a_newer_tool_and_keeps_what_the_ledger_changed(tmp_path: Path, monkeypatch, capsys):
-    """`setup --update`, run from a newer version's source, replaces a ledger's tool and the rulebook files the ledger
-    never changed, adds the one it lacks, and leaves the one it changed as it is, naming it. The ledger's own new tool
-    commits them, and the skill on this machine is written again. An older source, and uncommitted work in a file the
-    update would replace, are refused before anything is written."""
-    home = tmp_path / "home"
-    (home / ".claude" / "skills").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
+def release(source: Path, version: str, *changed: str) -> str:
+    """The tool's source as a git clone of its own at `version`, a line of the version's own added to each `changed`
+    file: what a newer (or an older) release would give a ledger. Returns its commit."""
+    for rel in ll.LEDGER_FILES:
+        if not (source / rel).exists():
+            (source / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ll.ROOT / rel, source / rel)
+    tool = source / "scripts" / "labledger.py"
+    tool.write_text(re.sub(r'(?m)^VERSION = "[0-9.]+"', f'VERSION = "{version}"', tool.read_text(encoding="utf-8")), encoding="utf-8")
+    for rel in changed:
+        (source / rel).write_text((source / rel).read_text(encoding="utf-8") + f"\nA rule of {version} in {rel}.\n", encoding="utf-8")
+    if not (source / ".git").exists():
+        git(source, "init", "-q", "-b", "main")
+    git(source, "add", "-A")
+    git(source, "commit", "-q", "-m", version)
+    return git(source, "rev-parse", "HEAD").strip()
+
+
+def made_by_setup(tmp_path: Path, monkeypatch, remote: str = "none") -> tuple[Path, Path]:
+    """The ledger labnotes, made by setup from the tool's source at its version, a git clone of its own, on a machine
+    whose Claude Code gets the skill: (the ledger, the source)."""
+    (tmp_path / "home" / ".claude" / "skills").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     for who in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{who}_NAME", "t")
         monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@example.org")
-    ledger = tmp_path / "labnotes"
-    assert ll.main(["setup", "--name", "labnotes", "--path", str(ledger), "--remote", "none", "--timezone", "UTC",
-                    "--language", "English", "--agents", "claude"]) == 0
-    tool, skill = [sys.executable, str(ledger / "scripts" / "labnotes.py")], home / ".claude" / "skills" / "labnotes" / "SKILL.md"
+    ledger, source = tmp_path / "labnotes", tmp_path / "source"
+    release(source, ll.VERSION)
+    r = subprocess.run([sys.executable, str(source / "scripts" / "labledger.py"), "setup", "--name", "labnotes", "--path",
+                        str(ledger), "--remote", remote, "--timezone", "UTC", "--language", "English", "--agents", "claude"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return ledger, source
+
+
+def update_from(source: Path, ledger: Path, **env: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(source / "scripts" / "labledger.py"), "setup", "--update", str(ledger)],
+                          capture_output=True, text=True, env={**os.environ, **env})
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
+def test_an_update_decides_file_by_file_from_what_the_tool_last_wrote(tmp_path: Path, monkeypatch, capsys):
+    """`setup --update`, run from a newer source, compares each file the ledger has committed with what setup or the last
+    update wrote there, as their commits record it. A file left as written is replaced; a rulebook file the ledger changed
+    stays, with what it takes to merge the new version in; a tool file the ledger changed is replaced and its version
+    named; a removed one stays removed. A commit that only looks like an update fools nothing, an update that could not
+    commit is finished by the next one, and an older source, a clone behind the one the ledger took, or uncommitted work
+    in a file it would replace, is refused before anything is written."""
+    ledger, source = made_by_setup(tmp_path, monkeypatch)
+    tool, skill = [sys.executable, str(ledger / "scripts" / "labnotes.py")], tmp_path / "home" / ".claude" / "skills" / "labnotes" / "SKILL.md"
     rules = ledger / "AGENTS.md"
-    rules.write_text(rules.read_text(encoding="utf-8") + "\nOur own rule.\n", encoding="utf-8")
-    subprocess.run([*tool, "commit", "-m", "labnotes(meta): our own rule", "AGENTS.md"], check=True, capture_output=True)
-    git(ledger, "rm", "-q", "MACHINES.md")
-    git(ledger, "commit", "-q", "-m", "labnotes(meta): a ledger from before MACHINES.md")
+    rules.write_text(rules.read_text(encoding="utf-8").replace("# Ledger rules\n", "# Ledger rules\n\nOur own rule.\n", 1), encoding="utf-8")
+    git(ledger, "commit", "-q", "-am", "labnotes: take labledger 0.0.9")  # it looks like an update, and is the ledger's own rule
+    own = ledger / "scripts" / "labnotes.py"
+    own.write_text(own.read_text(encoding="utf-8") + "# our patch\n", encoding="utf-8")
+    git(ledger, "commit", "-q", "-am", "labnotes(tool): our patch")
+    git(ledger, "rm", "-q", ".github/workflows/validate.yml")
+    git(ledger, "commit", "-q", "-m", "labnotes(meta): no CI here")
     skill.write_text(skill.read_text(encoding="utf-8").replace("## Look first", "## Look first (old)"), encoding="utf-8")
 
-    newer = tmp_path / "newer"
-    for rel in ll.LEDGER_FILES:
-        (newer / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ll.ROOT / rel, newer / rel)
-    source = newer / "scripts" / "labledger.py"
-    source.write_text(source.read_text(encoding="utf-8").replace(f'VERSION = "{ll.VERSION}"', 'VERSION = "9.9.9"'), encoding="utf-8")
-    for rel in ("AGENTS.md", "SETUP.md"):
-        (newer / rel).write_text((newer / rel).read_text(encoding="utf-8") + f"\nA rule of 9.9.9 in {rel}.\n", encoding="utf-8")
-    r = subprocess.run([sys.executable, str(source), "setup", "--update", str(ledger)], capture_output=True, text=True)
+    took = release(source, "9.9.9", "AGENTS.md", "SETUP.md", "MACHINES.md")
+
+    def new(rel: str) -> str:
+        return ll.renamed((source / rel).read_text(encoding="utf-8"), "labnotes")
+
+    r = update_from(source, ledger)
     assert r.returncode == 0, r.stdout + r.stderr
     assert subprocess.run([*tool, "--version"], capture_output=True, text=True).stdout == f"labledger 9.9.9 ({ll.SOURCE_URL})\n"
     for rel in ("SETUP.md", "MACHINES.md", "scripts/labledger.py", "tests/test_labledger.py"):
-        assert (ledger / ll.renamed(rel, "labnotes")).read_text(encoding="utf-8") == ll.renamed(
-            (newer / rel).read_text(encoding="utf-8"), "labnotes"), rel
+        assert (ledger / ll.renamed(rel, "labnotes")).read_text(encoding="utf-8") == new(rel), rel
+    assert "replaced scripts/labnotes.py, which the ledger had changed" in r.stdout and "`git show " in r.stdout
+    assert "left out .github/workflows/validate.yml: the ledger removed it" in r.stdout
+    assert not (ledger / ".github" / "workflows" / "validate.yml").exists()
     assert "Our own rule." in rules.read_text(encoding="utf-8") and "9.9.9" not in rules.read_text(encoding="utf-8")
-    assert "left as the ledger has them, since it changed them after setup or the last update: AGENTS.md" in r.stdout
-    assert git(ledger, "log", "-1", "--format=%s") == "labnotes: take labledger 9.9.9\n" and git(ledger, "status", "--porcelain") == ""
+    merge = next(line.split("#")[0].split() for line in r.stdout.splitlines() if "git merge-file AGENTS.md" in line)
+    subprocess.run(merge, cwd=ledger, check=True)
+    merged = rules.read_text(encoding="utf-8")
+    assert "Our own rule." in merged and "A rule of 9.9.9 in AGENTS.md." in merged, "the merge carries both in"
+    git(ledger, "checkout", "--", "AGENTS.md")
+    message = git(ledger, "log", "-1", "--format=%B")
+    assert message.startswith("labnotes: take labledger 9.9.9\n") and f"\nSource: {took}\n" in message and " SETUP.md\n" in message
     assert "(old)" not in skill.read_text(encoding="utf-8"), "the skill on this machine is written again"
+    r = update_from(source, ledger)
+    assert r.returncode == 0 and "already has" in r.stdout and git(ledger, "log", "-1", "--format=%s") == "labnotes: take labledger 9.9.9\n"
 
-    assert ll.main(["setup", "--update", str(ledger)]) == 2
-    assert f"the ledger runs labledger 9.9.9, newer than this {ll.VERSION}" in capsys.readouterr().err
-    mine = ledger / "scripts" / "labnotes.py"
-    mine.write_text(mine.read_text(encoding="utf-8") + "# someone's unfinished work\n", encoding="utf-8")
-    r = subprocess.run([sys.executable, str(source), "setup", "--update", str(ledger)], capture_output=True, text=True)
+    took = release(source, "9.9.10", "SETUP.md")
+    own.write_text(new("scripts/labledger.py"), encoding="utf-8")  # what an update that could not commit leaves behind
+    r = update_from(source, ledger)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(ledger, "log", "-1", "--format=%s") == "labnotes: take labledger 9.9.10\n" and git(ledger, "status", "--porcelain") == ""
+    assert (ledger / "SETUP.md").read_text(encoding="utf-8") == new("SETUP.md"), "left as the last update wrote it, so replaced"
+
+    head = git(ledger, "rev-parse", "HEAD")
+    release(tmp_path / "older", "9.9.1")
+    behind = tmp_path / "behind"
+    release(behind, "9.9.10")
+    for older, why in ((tmp_path / "older", "the ledger runs labledger 9.9.10, newer than this 9.9.1"),
+                       (behind, f"the ledger took labledger at {took[:12]}, which this clone")):
+        r = update_from(older, ledger)
+        assert r.returncode == 2 and why in r.stderr, r.stderr
+    if os.geteuid():  # root writes into a read-only file
+        release(source, "9.9.11", "SETUP.md")
+        (ledger / "SETUP.md").chmod(0o444)
+        r = update_from(source, ledger)
+        (ledger / "SETUP.md").chmod(0o644)
+        assert r.returncode == 2 and "this session cannot write SETUP.md (read-only)" in r.stderr, r.stderr
+        assert git(ledger, "rev-parse", "HEAD") == head and git(ledger, "status", "--porcelain") == "", "nothing written"
+    own.write_text(own.read_text(encoding="utf-8") + "# someone's unfinished work\n", encoding="utf-8")
+    r = update_from(source, ledger)
     assert r.returncode == 2 and "uncommitted changes in scripts/labnotes.py" in r.stderr
-    assert mine.read_text(encoding="utf-8").endswith("# someone's unfinished work\n")
+    assert own.read_text(encoding="utf-8").endswith("# someone's unfinished work\n") and git(ledger, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
+def test_an_update_syncs_the_ledger_first(tmp_path: Path, monkeypatch):
+    """An update decides from what every machine wrote: it syncs the ledger before it looks, and writes nothing while the
+    ledger cannot be synced."""
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    ledger, source = made_by_setup(tmp_path, monkeypatch, str(remote))
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", str(remote), str(other))
+    (other / "note.txt").write_text("from another machine\n", encoding="utf-8")
+    git(other, "add", "note.txt")
+    git(other, "commit", "-q", "-m", "labnotes(meta): a note from another machine")
+    git(other, "push", "-q", "origin", "main")
+    release(source, "9.9.9", "SETUP.md")
+    head = git(ledger, "rev-parse", "HEAD")
+    git(ledger, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    r = update_from(source, ledger)
+    assert r.returncode == 2 and "not in sync with its remote" in r.stderr, r.stdout + r.stderr
+    assert git(ledger, "rev-parse", "HEAD") == head and git(ledger, "status", "--porcelain") == "", "nothing written"
+    git(ledger, "remote", "set-url", "origin", str(remote))
+    quiet = tmp_path / "no-pytest"  # the ledger's pre-push hook would run its whole test suite: not again here
+    quiet.mkdir()
+    (quiet / "pytest.py").write_text("raise ImportError('left out of this test')\n", encoding="utf-8")
+    r = update_from(source, ledger, PYTHONPATH=str(quiet))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(ledger, "log", "-2", "--format=%s") == "labnotes: take labledger 9.9.9\nlabnotes(meta): a note from another machine\n"
+    assert git(remote, "rev-parse", "main") == git(ledger, "rev-parse", "HEAD"), "pushed on top of the other machine's work"

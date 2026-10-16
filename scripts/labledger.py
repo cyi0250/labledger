@@ -191,7 +191,7 @@ LABELS = {  # the words the write commands put into record bodies
     "in_progress": "(in progress)",  # a new EXP's summary
 }
 NAME = "labledger"  # what this ledger is called: its tool, settings, skill, commit messages, variables and refs carry it
-VERSION = "0.1.0"  # the version of labledger this tool is; a ledger's copy keeps the version it was taken at
+VERSION = "0.1.0"  # the tool's version; a ledger's copy keeps the version it was taken from
 SETTINGS_FILE = "labledger.yml"  # the ledger's settings: `key: value` lines, every key optional
 SETTINGS_KEYS = ("timezone", "commit_prefix", "language")
 COMMIT_PREFIX = NAME  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
@@ -3699,7 +3699,9 @@ def make_ledger(path: Path, name: str, timezone: str, language: str, remote: str
         write(f"{TEMPLATES_DIR}/labels.yml", "".join(f"{k}: {json.dumps(v, ensure_ascii=False)}\n" for k, v in LABELS.items()))
     _git(path, "init", "-q", "-b", "main")
     _git(path, "add", "--", *files)
-    _git(path, "commit", "-q", "-m", f"{name}: start the ledger")
+    marks = [f"{TOOL_MARK} {_git(path, 'hash-object', '--', d).strip()} {d}" for d in (renamed(r, name) for r in (*TOOL_FILES, *RULEBOOK))]
+    source = source_commit()  # what an update later goes by: the source commit and every file the tool wrote
+    _git(path, "commit", "-q", "-m", f"{name}: start the ledger", "-m", "\n".join(([f"{SOURCE_MARK} {source}"] if source else []) + marks))
     print(f"made the ledger {name} in {path}: scripts/{name}.py, {name}.yml, the rulebook, the hooks, the tests and CI")
     if remote:
         _git(path, "remote", "add", "origin", remote)
@@ -3725,80 +3727,176 @@ def install_skill(root: Path, name: str, language: str | None, prefix: str, dirs
     return out
 
 
+TOOL_MARK, SOURCE_MARK = "Tool-file:", "Source:"  # the end of setup's and an update's commit message: what the tool wrote
+
+
 def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(n) for n in version.split("."))
 
 
-def changed_by_the_ledger(path: Path, name: str, rel: str) -> bool:
-    """Whether the ledger `name` at `path` changed its file `rel` after setup made it or an update replaced it: a commit
-    of its own touched it last, or it holds uncommitted changes (a ledger outside git counts as having changed it)."""
-    last = _run(path, "log", "-1", "--format=%s", "--", rel).stdout.strip()
-    if last != f"{name}: start the ledger" and not last.startswith(f"{name}: take {SOURCE_NAME} "):
-        return True
-    return bool(_run(path, "status", "--porcelain", "--", rel).stdout.strip())
+def source_commit() -> str | None:
+    """The commit of the source repository this tool runs from, when the files it gives a ledger are as that commit has
+    them: what a ledger records it took. None for a source that is no git clone of its own, or that changed them."""
+    r = _run(ROOT, "rev-parse", "--show-toplevel", "HEAD")
+    top, _, head = r.stdout.strip().partition("\n")
+    if r.returncode or not head or Path(top).resolve() != ROOT.resolve():
+        return None
+    return None if _run(ROOT, "status", "--porcelain", "--", *TOOL_FILES, *RULEBOOK).stdout.strip() else head
+
+
+def tool_marks(path: Path, name: str) -> tuple[str | None, dict[str, str]]:
+    """What the history of the ledger `name` at `path` says the tool last wrote there: the source commit it last took, and
+    per file the blob setup or an update wrote. A ledger made before these marks goes by its setup commit, the root."""
+    took, blobs = None, {}
+    for body in _run(path, "log", "--format=%B%x00", f"--grep=^{TOOL_MARK} ", "HEAD").stdout.split("\0"):  # newest first
+        for line in body.splitlines():
+            key, _, rest = line.partition(" ")
+            if key == SOURCE_MARK and took is None:
+                took = rest.strip()
+            elif key == TOOL_MARK:
+                blob, _, rel = rest.partition(" ")
+                blobs.setdefault(rel, blob)
+    if not blobs:
+        for root in _run(path, "rev-list", "--max-parents=0", "HEAD").stdout.split():
+            if _run(path, "log", "-1", "--format=%s", root).stdout.strip() == f"{name}: start the ledger":
+                for line in _run(path, "ls-tree", "-r", root).stdout.splitlines():
+                    meta, _, rel = line.partition("\t")
+                    blobs[rel] = meta.split()[2]
+    return took, blobs
 
 
 def update_ledger(path: Path) -> int:
-    """Bring the ledger at `path` up to this version of the tool. Its tool files are replaced. Its rulebook files are
-    replaced too unless the ledger changed them after setup or the last update; those stay as they are, to carry the new
-    version's changes over by hand, and the missing ones are added. The ledger's own new tool then commits and pushes
-    what was written, and the ledger's skill is written again wherever this machine has it."""
+    """Bring the ledger at `path` up to this version of the tool, deciding file by file from what the tool last wrote
+    there (the marks at the end of setup's and the updates' commits), against what the ledger has committed:
+    - a file the ledger left as the tool wrote it is replaced, and one the tool never wrote is added;
+    - a rulebook file the ledger changed stays as it is, with this version and its base put beside it to merge;
+    - a tool file the ledger changed is replaced, naming where the ledger's version is; one it removed stays removed.
+    The ledger is synced first, and its own new tool commits what was written. The skill is written again wherever this
+    machine has it."""
     tools = [f for f in sorted((path / "scripts").glob("*.py")) if 'SOURCE_NAME = "lab" "ledger"' in f.read_text(encoding="utf-8")]
     if len(tools) != 1:
-        print(f"nothing updated — {path} holds no ledger tool (scripts/<ledger>.py) made from {SOURCE_NAME}", file=sys.stderr)
+        held = f"{len(tools)} ledger tools ({', '.join(f.name for f in tools)})" if tools else "no ledger tool (scripts/<ledger>.py)"
+        print(f"nothing updated — {path} holds {held}", file=sys.stderr)
         return 2
-    name = tools[0].stem
-    m = re.search(r'^VERSION = "([0-9.]+)"', tools[0].read_text(encoding="utf-8"), re.M)
-    had = m.group(1) if m else "0"  # a tool from before versions
+    name, tool = tools[0].stem, tools[0]
     blocker = commit_blocker(path)
     in_git = blocker != "not a git work tree"
-    problems = [f"the ledger runs {SOURCE_NAME} {had}, newer than this {VERSION}"] if version_tuple(had) > version_tuple(VERSION) else []
-    if in_git and blocker:
-        problems.append(blocker)
+    problems = [blocker] if in_git and blocker else []
     for place in [path, git_dir(path)] if in_git and not blocker else [path]:
         why = unwritable(place)
         if why:
             problems.append(f"this session cannot write {place} ({why})")
-    writes, kept = {}, []
-    for rel in (*TOOL_FILES, *RULEBOOK):
-        dest = renamed(rel, name)
-        if (path / dest).is_file() and (path / dest).read_text(encoding="utf-8") == renamed((ROOT / rel).read_text(encoding="utf-8"), name):
-            continue
-        if rel in RULEBOOK and (path / dest).exists() and changed_by_the_ledger(path, name, dest):
-            kept.append(dest)
-        else:
-            writes[dest] = rel
-    dirty = [d for d in writes if in_git and _run(path, "status", "--porcelain", "--", d).stdout.strip()]
-    if dirty:
-        problems.append(f"uncommitted changes in {', '.join(dirty)}: commit them or give them up first")
+    shipped, mine = (*TOOL_FILES, *RULEBOOK), source_commit()
+    if not problems and in_git and _upstream(path):  # decide from what every machine wrote, on a clone that is not behind
+        sys.stdout.flush()
+        if subprocess.run([sys.executable, str(tool), "sync"]).returncode:
+            problems.append("the ledger is not in sync with its remote (above): an update decides from what the ledger "
+                            "holds, so it waits until sync passes")
     if problems:
         print("nothing updated —", *problems, sep="\n  ", file=sys.stderr)
         return 2
-    for dest, rel in writes.items():
+
+    def committed(rel: str) -> str | None:
+        r = _run(path, "rev-parse", "-q", "--verify", f"HEAD:{rel}")
+        return r.stdout.strip() or None if r.returncode == 0 else None
+
+    def blob(text: str) -> str:
+        return _git(path, "hash-object", "--stdin", stdin=text).strip()
+
+    head_tool = _run(path, "show", f"HEAD:scripts/{name}.py").stdout if in_git else tool.read_text(encoding="utf-8")
+    m = re.search(r'^VERSION = "([0-9.]+)"', head_tool, re.M)
+    had = m.group(1) if m else None  # a tool from before versions
+    took, bases = tool_marks(path, name) if in_git else (None, {})
+    if had and version_tuple(had) > version_tuple(VERSION):
+        problems.append(f"the ledger runs {SOURCE_NAME} {had}, newer than this {VERSION}")
+    if took and mine and took != mine and not (_run(ROOT, "cat-file", "-e", f"{took}^{{commit}}").returncode == 0
+                                               and _run(ROOT, "merge-base", "--is-ancestor", took, mine).returncode == 0):
+        problems.append(f"the ledger took {SOURCE_NAME} at {took[:12]}, which this clone ({mine[:12]}) does not have or is "
+                        "behind: update from a clone that has it")
+    texts, writes, finish, same, kept, gone, own = {}, [], [], [], [], [], []
+    for rel in shipped:
+        dest = renamed(rel, name)
+        texts[dest] = new = renamed((ROOT / rel).read_text(encoding="utf-8"), name)
+        here = blob((path / dest).read_text(encoding="utf-8")) if (path / dest).is_file() else None
+        head = committed(dest) if in_git else here
+        base, new_blob = bases.get(dest), blob(new)
+        if here not in (head, new_blob):
+            problems.append(f"uncommitted changes in {dest}: commit them or give them up first")
+        elif head == new_blob:
+            same.append(dest)
+        elif here == new_blob:  # an update that could not commit wrote it: commit it now
+            finish.append(dest)
+        elif head != base if base else head is not None:  # the ledger changed it, or the tool never wrote it
+            if head is None:
+                gone.append(dest)
+            elif rel in RULEBOOK:
+                kept.append((dest, base))
+            else:
+                own.append(dest)
+                writes.append(dest)
+        else:
+            writes.append(dest)
+    for dest in writes:  # every file is checked before the first is written
+        target = path / dest
+        folder = next(f for f in (target, *target.parents) if f.exists())
+        why = unwritable(folder) if folder != target else (None if os.access(target, os.W_OK) else "read-only")
+        if why:
+            problems.append(f"this session cannot write {dest} ({why})")
+    if problems:
+        print("nothing updated —", *problems, sep="\n  ", file=sys.stderr)
+        return 2
+
+    before = _run(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()[:12] if in_git else None
+    for dest in writes:
+        rel = next(r for r in shipped if renamed(r, name) == dest)
         (path / dest).parent.mkdir(parents=True, exist_ok=True)
-        (path / dest).write_text(renamed((ROOT / rel).read_text(encoding="utf-8"), name), encoding="utf-8")
+        (path / dest).write_text(texts[dest], encoding="utf-8")
         shutil.copymode(ROOT / rel, path / dest)
     rc = 0
-    if writes:
-        print(f"took {SOURCE_NAME} {VERSION} (it had {had}) into {path}:", *writes, sep="\n  ")
-        subject = f"{name}: take {SOURCE_NAME} {VERSION}"
+    if writes or finish:
+        print(f"took {SOURCE_NAME} {VERSION} into {path} (it had {had or 'a tool from before versions'}):", *writes, *finish, sep="\n  ")
         if in_git:  # through the ledger's own new tool: its checks, its hooks, its push
-            rc = subprocess.run([sys.executable, str(path / "scripts" / f"{name}.py"), "commit", "-m", subject, *writes]).returncode
+            prefix = read_kv(path / f"{name}.yml", f"{name}.yml").get("commit_prefix") or name
+            marks = [f"{TOOL_MARK} {blob(texts[d])} {d}" for d in (*writes, *finish, *same)]
+            message = git_dir(path) / f"{name}-update-message"
+            message.write_text(f"{prefix}: take {SOURCE_NAME} {VERSION}\n\nThe ledger had {SOURCE_NAME} {had or 'from before versions'}.\n\n"
+                               + "".join(f"{line}\n" for line in ([f"{SOURCE_MARK} {mine}"] if mine else []) + marks), encoding="utf-8")
+            sys.stdout.flush()
+            rc = subprocess.run([sys.executable, str(tool), "commit", "-F", str(message), *writes, *finish]).returncode
+            message.unlink()
             if rc == 1:
-                print(f"the files are written but not committed: fix what the commit names, then run\n  python3 "
-                      f"{path}/scripts/{name}.py commit -m \"{subject}\" {' '.join(writes)}", file=sys.stderr)
+                print("the files are written but not committed: fix what the commit names, then run this update again, which "
+                      "commits them", file=sys.stderr)
                 rc = UNFINISHED
     else:
-        print(f"the ledger {name} already has the tool of {SOURCE_NAME} {VERSION}")
+        print(f"the ledger {name} already has what {SOURCE_NAME} {VERSION} gives it")
+    for dest in own:
+        print(f"replaced {dest}, which the ledger had changed (or the tool never wrote): its version is "
+              + (f"`git show {before}:{dest}`" if before else "gone"))
+    for dest in gone:
+        print(f"left out {dest}: the ledger removed it")
     if kept:
-        print(f"left as the ledger has them, since it changed them after setup or the last update: {', '.join(kept)} — compare "
-              f"each with {ROOT}'s and carry over what changed")
+        beside = (git_dir(path) if in_git else path) / f"{name}-update"
+        print("left as the ledger has them, since it changed them after the tool wrote them (or no record shows what the tool "
+              "wrote); to carry this version's changes in:")
+        for dest, base in kept:
+            (beside / f"{dest}.new").parent.mkdir(parents=True, exist_ok=True)
+            (beside / f"{dest}.new").write_text(texts[dest], encoding="utf-8")
+            if base:
+                (beside / f"{dest}.base").write_text(_git(path, "cat-file", "blob", base), encoding="utf-8")
+                print(f"  git merge-file {dest} {beside / dest}.base {beside / dest}.new   # then commit {dest}")
+            else:
+                print(f"  diff -u {dest} {beside / dest}.new   # no record of what the tool wrote: compare and carry over by hand")
     dirs = {d: agents for d, agents in skill_dirs(AGENT_SKILLS).items() if skill_root(d / name) == path}
     if dirs:
         ledger = read_kv(path / f"{name}.yml", f"{name}.yml")
-        print(f"wrote the skill {name} again:", *install_skill(path, name, ledger.get("language"), ledger.get("commit_prefix") or name,
-                                                               dirs), sep="\n  ")
-    if writes:
+        try:
+            print(f"wrote the skill {name} again:", *install_skill(path, name, ledger.get("language"),
+                                                                   ledger.get("commit_prefix") or name, dirs), sep="\n  ")
+        except OSError as exc:
+            print(f"the skill was not written again ({exc.strerror}: {exc.filename}); the ledger is updated — write the skill "
+                  f"with `python3 scripts/{name}.py setup --agents …` where it can be", file=sys.stderr)
+    if (writes or finish) and rc == 0 and in_git and _upstream(path):
         print(f"other machines take the new tool with `python3 scripts/{name}.py sync`, then write their skill again with "
               f"`python3 scripts/{name}.py setup --agents …`")
     return rc
@@ -3829,6 +3927,9 @@ def cmd_setup(args) -> int:
                                                              dirs), sep="\n  ")
         return 0
     if args.update:
+        if any(v is not None for v in (args.name, args.path, args.remote, args.timezone, args.language, args.agents)):
+            print("setup --update takes the ledger's folder alone", file=sys.stderr)
+            return 2
         return update_ledger(args.update.expanduser().resolve())
     every = skill_dirs(AGENT_SKILLS)
     answers = {"name": args.name, "path": args.path, "remote": args.remote, "timezone": args.timezone,
@@ -3905,7 +4006,7 @@ def main(argv: list[str]) -> int:
 
     parser = command(prog="labledger.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION} ({SOURCE_URL})",
-                        help="the version of labledger this tool was taken at")
+                        help=f"the version of {SOURCE_NAME} this tool was taken from, and where its source is")
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)
     p = sub.add_parser("validate", help="check every record and the rules between them"); p.set_defaults(func=cmd_validate)
     p.add_argument("--json", action="store_true", help="one JSON object: ok, problems, counts, stale views")

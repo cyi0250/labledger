@@ -54,24 +54,30 @@ agent running it asks them, then runs it again with the answers.
 
 ## A newer version of the tool
 
-A ledger runs its own copy of the tool, which keeps the version it was taken at: `scripts/<ledger>.py --version` names
-it and the tool's source repository. To take a newer version, clone that repository at the version and run the clone's
-tool with `setup --update <ledger folder>`:
+A ledger runs its own copy of the tool, which keeps the version of the tool it was taken from: `scripts/<ledger>.py
+--version` names it and the tool's source repository. To take a newer version, clone that repository (its `main`, or a
+release tag) and run the clone's tool with `setup --update <ledger folder>`. Setup and every update end their commit
+message with the source commit they took and the blob of each file they wrote, and the update decides from those marks,
+against what the ledger has committed:
 
-- **The tool is replaced**: the script, its hooks, its tests and CI, with the source's name in them replaced as setup
-  does.
-- **The rulebook files** (`AGENTS.md`, `MACHINES.md`, `SETUP.md`) are replaced too unless the ledger changed them after
-  setup made them or an update replaced them, and a missing one is added. One the ledger changed (its own rules, or
-  another language) stays as it is and is named: compare it with the new version's and carry the changes over by hand.
-- **It refuses before writing anything**: a ledger whose tool is newer than the clone's, uncommitted changes in a file
-  it would replace, a session that cannot write the ledger.
-- The ledger's own new tool commits and pushes what was written, and the skill is written again wherever this machine
-  has it. Other machines take the new tool with `sync`, then write their skill again with `setup --agents …`.
+- **It syncs the ledger first**, and writes nothing while the ledger is not in sync with its remote.
+- **A file the ledger left as the tool wrote it is replaced**, and a file the tool never wrote is added.
+- **A rulebook file the ledger changed** (`AGENTS.md`, `MACHINES.md`, `SETUP.md`: rules of its own, another language)
+  stays as it is. The update puts the new version and the base the ledger changed beside it, in the ledger's `.git`,
+  and prints the `git merge-file` command that carries the new version's changes in.
+- **A tool file the ledger changed** (the script, its hooks, its tests, CI) is replaced all the same, and the update
+  prints where the ledger's version is (`git show <commit>:<path>`). A file the ledger removed stays removed.
+- **It refuses before writing anything**: a clone older than what the ledger took (a lower version, or a source commit
+  the clone lacks), uncommitted work in a file it would replace, a file or folder this session cannot write.
+- The ledger's own new tool commits and pushes what was written. An update that could not commit (exit code 3) is
+  finished by running it again once the problem its commit named is fixed. The skill is written again wherever this
+  machine has it; other machines take the new tool with `sync`, then write their skill again with `setup --agents …`.
+  `CLAUDE.md` and `.gitignore` are the ledger's own after setup, and an update leaves them.
 
 ## The tool
 
-`scripts/labledger.py --version` names the version of labledger the tool is. It needs Python 3.9 or newer with its
-standard library alone, Linux or macOS (it locks files with `fcntl`), and git 2.28 or newer (tested with 2.34). After
-changing it, `python3 -m pytest tests` passes: each test builds a small ledger in a temporary folder and runs commands
-on it; in the tool's source repository one also validates `examples/demo` and one makes a ledger with `setup`. This
-ledger itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.
+`scripts/labledger.py --version` names the version of the tool and its source repository. It needs Python 3.9 or newer
+with its standard library alone, Linux or macOS (it locks files with `fcntl`), and git 2.28 or newer (tested with
+2.34). After changing it, `python3 -m pytest tests` passes: each test builds a small ledger in a temporary folder and
+runs commands on it; in the tool's source repository one also validates `examples/demo` and one makes a ledger with
+`setup`. This ledger itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.
