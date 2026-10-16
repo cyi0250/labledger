@@ -52,6 +52,22 @@ agent running it asks them, then runs it again with the answers.
   summary). Review group 3 looks for the `resolved` word.
 - validate refuses an unknown setting, label or template file, and a time zone this machine does not know.
 
+## A newer version of the tool
+
+A ledger runs its own copy of the tool, which keeps the version it was taken at: `scripts/<ledger>.py --version` names
+it and the tool's source repository. To take a newer version, clone that repository at the version and run the clone's
+tool with `setup --update <ledger folder>`:
+
+- **The tool is replaced**: the script, its hooks, its tests and CI, with the source's name in them replaced as setup
+  does.
+- **The rulebook files** (`AGENTS.md`, `MACHINES.md`, `SETUP.md`) are replaced too unless the ledger changed them after
+  setup made them or an update replaced them, and a missing one is added. One the ledger changed (its own rules, or
+  another language) stays as it is and is named: compare it with the new version's and carry the changes over by hand.
+- **It refuses before writing anything**: a ledger whose tool is newer than the clone's, uncommitted changes in a file
+  it would replace, a session that cannot write the ledger.
+- The ledger's own new tool commits and pushes what was written, and the skill is written again wherever this machine
+  has it. Other machines take the new tool with `sync`, then write their skill again with `setup --agents …`.
+
 ## The tool
 
 `scripts/labledger.py --version` names the version of labledger the tool is. It needs Python 3.9 or newer with its

@@ -1,14 +1,14 @@
 # Ledger rules
 
-This repository is a **ledger**: the plans, experiments, observations and decisions of a project, one Markdown file per
-record, kept by the people and the AI agents who do the work. `scripts/labledger.py` writes the records, checks them
-and builds the tables. This file holds the rules every session uses. Two more hold what only some sessions meet, each
-read when its case comes up: [MACHINES.md](MACHINES.md) when the ledger is kept on more than one machine (numbers, a
-`sync` that stopped, partial clones, SSH), and [SETUP.md](SETUP.md) to set up the ledger or its skill, to change its
-settings (`labledger.yml`: time zone, commit prefix, language) or templates, or to change the tool. Every rule in the
-three files is checked by the tool: by `validate`, by a command before it writes, or when a commit is made or pushed.
-What the tool cannot check is marked *guidance* and says why it is there. A check sees the form of a record, not its
-meaning: that a note is filled, not that it says why.
+This repository is a **ledger**: the plans, experiments, observations and decisions of a project, one Markdown file
+per record, kept by the people and the AI agents who do the work. `scripts/labledger.py` writes the records, checks
+them and builds the tables. This file holds the rules every session uses. Two more hold what only some sessions meet,
+each read when its case comes up: [MACHINES.md](MACHINES.md) when the ledger is kept on more than one machine
+(numbers, a `sync` that stopped, partial clones, SSH), and [SETUP.md](SETUP.md) to set up the ledger or its skill, to
+change its settings (`labledger.yml`: time zone, commit prefix, language) or templates, or to change the tool or take
+a newer version of it. Every rule in the three files is checked by the tool: by `validate`, by a command before it
+writes, or when a commit is made or pushed. What the tool cannot check is marked *guidance* and says why it is there.
+A check sees the form of a record, not its meaning: that a note is filled, not that it says why.
 
 **Every write command commits what it wrote, and pushes it when the branch tracks a remote.** Nobody is asked before a
 record is committed (see [Commits](#commits)).

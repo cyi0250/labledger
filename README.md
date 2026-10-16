@@ -33,8 +33,12 @@ the answer it recommends on your machine:
 
 The agent then runs setup with your answers. setup makes the ledger, commits and pushes it, turns its hooks on, and
 installs the skill. From then on your agents record their experiments and data, decisions, defects, investigations and
-TODOs as the work produces them, and look up what is recorded before they start. setup runs the same from a terminal. On
-another machine, clone the ledger and run `python3 scripts/<ledger>.py setup` in it.
+TODOs as the work produces them, and look up what is recorded before they start. setup runs the same from a terminal.
+On another machine, clone the ledger and run `python3 scripts/<ledger>.py setup` in it.
+
+To take a newer version of labledger into a ledger later, clone labledger at that version and run
+`python3 labledger/scripts/labledger.py setup --update <ledger folder>`: it replaces the tool and the rulebook files
+the ledger never changed, and names the ones it did.
 
 [`examples/demo`](examples/demo) is a small finished ledger: a TODO settled by an experiment, with the benchmark script,
 its data table, a state table and two decisions.

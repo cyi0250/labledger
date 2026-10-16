@@ -1745,3 +1745,54 @@ def test_setup_asks_first_then_makes_a_ledger_under_the_chosen_name_with_a_skill
     assert not (solo / "templates").exists()
     r = subprocess.run([sys.executable, str(solo / "scripts" / "labsolo.py"), "sync"], capture_output=True, text=True)
     assert r.returncode == 0 and "nothing to sync" in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
+def test_an_update_brings_a_ledger_up_to_a_newer_tool_and_keeps_what_the_ledger_changed(tmp_path: Path, monkeypatch, capsys):
+    """`setup --update`, run from a newer version's source, replaces a ledger's tool and the rulebook files the ledger
+    never changed, adds the one it lacks, and leaves the one it changed as it is, naming it. The ledger's own new tool
+    commits them, and the skill on this machine is written again. An older source, and uncommitted work in a file the
+    update would replace, are refused before anything is written."""
+    home = tmp_path / "home"
+    (home / ".claude" / "skills").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@example.org")
+    ledger = tmp_path / "labnotes"
+    assert ll.main(["setup", "--name", "labnotes", "--path", str(ledger), "--remote", "none", "--timezone", "UTC",
+                    "--language", "English", "--agents", "claude"]) == 0
+    tool, skill = [sys.executable, str(ledger / "scripts" / "labnotes.py")], home / ".claude" / "skills" / "labnotes" / "SKILL.md"
+    rules = ledger / "AGENTS.md"
+    rules.write_text(rules.read_text(encoding="utf-8") + "\nOur own rule.\n", encoding="utf-8")
+    subprocess.run([*tool, "commit", "-m", "labnotes(meta): our own rule", "AGENTS.md"], check=True, capture_output=True)
+    git(ledger, "rm", "-q", "MACHINES.md")
+    git(ledger, "commit", "-q", "-m", "labnotes(meta): a ledger from before MACHINES.md")
+    skill.write_text(skill.read_text(encoding="utf-8").replace("## Look first", "## Look first (old)"), encoding="utf-8")
+
+    newer = tmp_path / "newer"
+    for rel in ll.LEDGER_FILES:
+        (newer / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ll.ROOT / rel, newer / rel)
+    source = newer / "scripts" / "labledger.py"
+    source.write_text(source.read_text(encoding="utf-8").replace(f'VERSION = "{ll.VERSION}"', 'VERSION = "9.9.9"'), encoding="utf-8")
+    for rel in ("AGENTS.md", "SETUP.md"):
+        (newer / rel).write_text((newer / rel).read_text(encoding="utf-8") + f"\nA rule of 9.9.9 in {rel}.\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(source), "setup", "--update", str(ledger)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert subprocess.run([*tool, "--version"], capture_output=True, text=True).stdout == f"labledger 9.9.9 ({ll.SOURCE_URL})\n"
+    for rel in ("SETUP.md", "MACHINES.md", "scripts/labledger.py", "tests/test_labledger.py"):
+        assert (ledger / ll.renamed(rel, "labnotes")).read_text(encoding="utf-8") == ll.renamed(
+            (newer / rel).read_text(encoding="utf-8"), "labnotes"), rel
+    assert "Our own rule." in rules.read_text(encoding="utf-8") and "9.9.9" not in rules.read_text(encoding="utf-8")
+    assert "left as the ledger has them, since it changed them after setup or the last update: AGENTS.md" in r.stdout
+    assert git(ledger, "log", "-1", "--format=%s") == "labnotes: take labledger 9.9.9\n" and git(ledger, "status", "--porcelain") == ""
+    assert "(old)" not in skill.read_text(encoding="utf-8"), "the skill on this machine is written again"
+
+    assert ll.main(["setup", "--update", str(ledger)]) == 2
+    assert f"the ledger runs labledger 9.9.9, newer than this {ll.VERSION}" in capsys.readouterr().err
+    mine = ledger / "scripts" / "labnotes.py"
+    mine.write_text(mine.read_text(encoding="utf-8") + "# someone's unfinished work\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, str(source), "setup", "--update", str(ledger)], capture_output=True, text=True)
+    assert r.returncode == 2 and "uncommitted changes in scripts/labnotes.py" in r.stderr
+    assert mine.read_text(encoding="utf-8").endswith("# someone's unfinished work\n")

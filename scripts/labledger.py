@@ -3518,11 +3518,14 @@ def cmd_attachments(args) -> int:
 # ───────────────────────────── setup ─────────────────────────────
 
 SOURCE_NAME = "lab" "ledger"  # the name in the tool's source files, which setup replaces in a new ledger (split so the replacing skips it)
+SOURCE_URL = "https://github.com/cyi0250/" "lab" "ledger"  # where a ledger takes a newer tool from
 NAME_RE = re.compile(r"^[a-z][a-z0-9]{1,31}$")  # a file name, a Python module, a skill name and, in capitals, a variable prefix
 NAME_CHOICES = ("ledger", "labbook", "logbook", "worklog")  # setup recommends the first one nothing on the machine answers to
 GIT_REF_SPACES = ("heads", "tags", "remotes", "notes", "replace", "stash", "bisect", "prefetch", "rewritten", "worktree")
-LEDGER_FILES = ("scripts/labledger.py", "scripts/hooks/pre-commit", "scripts/hooks/pre-push", "tests/test_labledger.py",
-                ".github/workflows/validate.yml", "AGENTS.md", "MACHINES.md", "SETUP.md", "CLAUDE.md", ".gitignore")  # what a new ledger is made of
+TOOL_FILES = ("scripts/labledger.py", "scripts/hooks/pre-commit", "scripts/hooks/pre-push", "tests/test_labledger.py",
+              ".github/workflows/validate.yml")  # the tool, which an update replaces
+RULEBOOK = ("AGENTS.md", "MACHINES.md", "SETUP.md")  # an update replaces them unless the ledger changed them, and adds the missing
+LEDGER_FILES = (*TOOL_FILES, *RULEBOOK, "CLAUDE.md", ".gitignore")  # what a new ledger is made of
 AGENT_SKILLS = {  # agent: a folder of its user's skills it reads, and the folder that is there once the agent is installed
     "claude": ("~/.claude/skills", "~/.claude"),  # Claude Code reads its own folder only
     "codex": ("~/.agents/skills", "~/.codex"),  # the others all read the shared one
@@ -3713,12 +3716,95 @@ def install_skill(root: Path, name: str, language: str | None, prefix: str, dirs
     return out
 
 
+def version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in version.split("."))
+
+
+def changed_by_the_ledger(path: Path, name: str, rel: str) -> bool:
+    """Whether the ledger `name` at `path` changed its file `rel` after setup made it or an update replaced it: a commit
+    of its own touched it last, or it holds uncommitted changes (a ledger outside git counts as having changed it)."""
+    last = _run(path, "log", "-1", "--format=%s", "--", rel).stdout.strip()
+    if last != f"{name}: start the ledger" and not last.startswith(f"{name}: take {SOURCE_NAME} "):
+        return True
+    return bool(_run(path, "status", "--porcelain", "--", rel).stdout.strip())
+
+
+def update_ledger(path: Path) -> int:
+    """Bring the ledger at `path` up to this version of the tool. Its tool files are replaced. Its rulebook files are
+    replaced too unless the ledger changed them after setup or the last update; those stay as they are, to carry the new
+    version's changes over by hand, and the missing ones are added. The ledger's own new tool then commits and pushes
+    what was written, and the ledger's skill is written again wherever this machine has it."""
+    tools = [f for f in sorted((path / "scripts").glob("*.py")) if 'SOURCE_NAME = "lab" "ledger"' in f.read_text(encoding="utf-8")]
+    if len(tools) != 1:
+        print(f"nothing updated — {path} holds no ledger tool (scripts/<ledger>.py) made from {SOURCE_NAME}", file=sys.stderr)
+        return 2
+    name = tools[0].stem
+    m = re.search(r'^VERSION = "([0-9.]+)"', tools[0].read_text(encoding="utf-8"), re.M)
+    had = m.group(1) if m else "0"  # a tool from before versions
+    blocker = commit_blocker(path)
+    in_git = blocker != "not a git work tree"
+    problems = [f"the ledger runs {SOURCE_NAME} {had}, newer than this {VERSION}"] if version_tuple(had) > version_tuple(VERSION) else []
+    if in_git and blocker:
+        problems.append(blocker)
+    for place in [path, git_dir(path)] if in_git and not blocker else [path]:
+        why = unwritable(place)
+        if why:
+            problems.append(f"this session cannot write {place} ({why})")
+    writes, kept = {}, []
+    for rel in (*TOOL_FILES, *RULEBOOK):
+        dest = renamed(rel, name)
+        if (path / dest).is_file() and (path / dest).read_text(encoding="utf-8") == renamed((ROOT / rel).read_text(encoding="utf-8"), name):
+            continue
+        if rel in RULEBOOK and (path / dest).exists() and changed_by_the_ledger(path, name, dest):
+            kept.append(dest)
+        else:
+            writes[dest] = rel
+    dirty = [d for d in writes if in_git and _run(path, "status", "--porcelain", "--", d).stdout.strip()]
+    if dirty:
+        problems.append(f"uncommitted changes in {', '.join(dirty)}: commit them or give them up first")
+    if problems:
+        print("nothing updated —", *problems, sep="\n  ", file=sys.stderr)
+        return 2
+    for dest, rel in writes.items():
+        (path / dest).parent.mkdir(parents=True, exist_ok=True)
+        (path / dest).write_text(renamed((ROOT / rel).read_text(encoding="utf-8"), name), encoding="utf-8")
+        shutil.copymode(ROOT / rel, path / dest)
+    rc = 0
+    if writes:
+        print(f"took {SOURCE_NAME} {VERSION} (it had {had}) into {path}:", *writes, sep="\n  ")
+        subject = f"{name}: take {SOURCE_NAME} {VERSION}"
+        if in_git:  # through the ledger's own new tool: its checks, its hooks, its push
+            rc = subprocess.run([sys.executable, str(path / "scripts" / f"{name}.py"), "commit", "-m", subject, *writes]).returncode
+            if rc == 1:
+                print(f"the files are written but not committed: fix what the commit names, then run\n  python3 "
+                      f"{path}/scripts/{name}.py commit -m \"{subject}\" {' '.join(writes)}", file=sys.stderr)
+                rc = UNFINISHED
+    else:
+        print(f"the ledger {name} already has the tool of {SOURCE_NAME} {VERSION}")
+    if kept:
+        print(f"left as the ledger has them, since it changed them after setup or the last update: {', '.join(kept)} — compare "
+              f"each with {ROOT}'s and carry over what changed")
+    dirs = {d: agents for d, agents in skill_dirs(AGENT_SKILLS).items() if skill_root(d / name) == path}
+    if dirs:
+        ledger = read_kv(path / f"{name}.yml", f"{name}.yml")
+        print(f"wrote the skill {name} again:", *install_skill(path, name, ledger.get("language"), ledger.get("commit_prefix") or name,
+                                                               dirs), sep="\n  ")
+    if writes:
+        print(f"other machines take the new tool with `python3 scripts/{name}.py sync`, then write their skill again with "
+              f"`python3 scripts/{name}.py setup --agents …`")
+    return rc
+
+
 def cmd_setup(args) -> int:
     """Without the answers it needs, setup prints the questions to ask the user and does nothing else: the agent that
     runs it asks, then runs it again with the answers."""
     found = [a for a, (_, home) in AGENT_SKILLS.items() if Path(home).expanduser().is_dir()]
     tool = f"python3 {Path(__file__).resolve()} setup"
     if NAME != SOURCE_NAME:  # a ledger's own tool: put the skill of its ledger on this machine
+        if args.update:
+            print(f"a newer tool comes from {SOURCE_URL}: clone it at the version to take, then run\n  python3 "
+                  f"<clone>/scripts/{SOURCE_NAME}.py setup --update {ROOT}", file=sys.stderr)
+            return 2
         if not args.agents:
             print(f"nothing set up yet — ask the user which agents on this machine get the skill `{NAME}`, which lets them "
                   f"record in {ROOT} on their own (agents: {', '.join(AGENT_SKILLS)}; found here: {', '.join(found) or 'none'}), "
@@ -3733,6 +3819,8 @@ def cmd_setup(args) -> int:
         print(f"installed the skill {NAME}:", *install_skill(ROOT, NAME, ledger.get("language"), ledger.get("commit_prefix") or NAME,
                                                              dirs), sep="\n  ")
         return 0
+    if args.update:
+        return update_ledger(args.update.expanduser().resolve())
     every = skill_dirs(AGENT_SKILLS)
     answers = {"name": args.name, "path": args.path, "remote": args.remote, "timezone": args.timezone,
                "language": args.language, "agents": " ".join(args.agents) if args.agents else None}
@@ -3807,7 +3895,7 @@ def main(argv: list[str]) -> int:
         return argparse.ArgumentParser(parents=[common], **kwargs)
 
     parser = command(prog="labledger.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION}",
+    parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION} ({SOURCE_URL})",
                         help="the version of labledger this tool was taken at")
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)
     p = sub.add_parser("validate", help="check every record and the rules between them"); p.set_defaults(func=cmd_validate)
@@ -3918,6 +4006,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--timezone", help="a new ledger: the IANA time zone of its dates, like Europe/Berlin")
     p.add_argument("--language", help="a new ledger: the language its records are written in")
     p.add_argument("--agents", nargs="+", choices=tuple(AGENT_SKILLS), help="the agents on this machine that get the skill")
+    p.add_argument("--update", type=Path, metavar="LEDGER", help="in the tool's source repository: bring the ledger in this "
+                   "folder up to this version of the tool")
     p = sub.add_parser("hook", help="run by the git hooks: pre-commit validates the index to commit, pre-push the tips to push")
     p.set_defaults(func=cmd_hook)
     p.add_argument("name", choices=("pre-commit", "pre-push"))
