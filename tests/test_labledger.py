@@ -1337,6 +1337,21 @@ def test_a_remote_that_refuses_the_counter_is_not_taken_for_a_race(grepo: Path, 
     assert "counter pushes are not allowed here" in err and "kept moving" not in err
 
 
+def test_numbers_come_only_from_new_and_a_refused_record_takes_none(grepo: Path, origin: Path, capsys):
+    """A record is checked before its number is reserved, so a refused one leaves no gap. A record added under a number
+    no `new` reserved is refused at commit; a number taken with --offline is noted in the clone's copy of the counter."""
+    assert run(grepo, "new", "exp", "refused", "--affects", "NOPE-001: progress") == 2
+    assert run(grepo, "new", "exp", "kept") == 0 and (grepo / "experiments" / "EXP-0002.md").is_file(), "no number was spent"
+    exp = grepo / "experiments" / "EXP-0002.md"
+    hand = exp.with_name("EXP-0003.md")
+    hand.write_text(exp.read_text(encoding="utf-8").replace("EXP-0002", "EXP-0003"), encoding="utf-8")
+    capsys.readouterr()
+    assert run(grepo, "commit", "-m", "x", "EXP-0003") == 1
+    assert "EXP-0003 is past the last number reserved for EXP (2)" in capsys.readouterr().err
+    hand.unlink()
+    assert run(grepo, "--offline", "new", "exp", "away") == 0 and git(grepo, "log", "-1", "--format=%s").startswith("labledger(exp): open EXP-0003")
+
+
 def test_no_number_without_the_upstream_unless_offline(grepo: Path, origin: Path, tmp_path: Path, capsys):
     git(grepo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
     assert run(grepo, "new", "exp", "x") == 1

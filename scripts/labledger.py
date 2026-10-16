@@ -2042,28 +2042,33 @@ def cmd_new_todo(args) -> int:
         print(f"prefix `{prefix}` must be capital letters and dashes, like LAB or LAB-SIM", file=sys.stderr)
         return 2
     nums = [int(t.id.rsplit("-", 1)[1]) for t in graph.todos.values() if t.id.rsplit("-", 1)[0] == prefix]
+    today = record_today(args.root)
+    skeleton = graph.skeleton("todo")
+
+    def build(node_id: str) -> Todo:
+        path = root / "areas" / area / f"{node_id}.md"
+        fm = {"id": node_id, "type": "todo", "title": args.title, "area": area, "status": args.status,
+              "priority": args.priority, "created": today, "updated": today}
+        from_ids = list(args.from_ids or [])
+        if args.arc:
+            from_ids.append(f"arc:{args.arc}")
+        if from_ids:
+            fm["from"] = from_ids
+        if args.depends_on:
+            fm["depends_on"] = args.depends_on
+        return Todo(path, fm, skeleton, new_node_text("todo", fm, skeleton), rel=path.relative_to(root).as_posix())
+
+    problems = check_node(graph, "todo", build(provisional_id(prefix + "-{:03d}", nums)))
+    if problems:
+        return refuse(problems)
     node_id = new_id(args, prefix, nums, prefix + "-{:03d}")
     if isinstance(node_id, int):
         return node_id
-    path = root / "areas" / area / f"{node_id}.md"
+    todo = build(node_id)
+    path = todo.path
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
         return 1
-    today = record_today(args.root)
-    fm = {"id": node_id, "type": "todo", "title": args.title, "area": area, "status": args.status,
-          "priority": args.priority, "created": today, "updated": today}
-    from_ids = list(args.from_ids or [])
-    if args.arc:
-        from_ids.append(f"arc:{args.arc}")
-    if from_ids:
-        fm["from"] = from_ids
-    if args.depends_on:
-        fm["depends_on"] = args.depends_on
-    skeleton = graph.skeleton("todo")
-    todo = Todo(path, fm, skeleton, new_node_text("todo", fm, skeleton), rel=path.relative_to(root).as_posix())
-    problems = check_node(graph, "todo", todo)
-    if problems:
-        return refuse(problems)
     path.write_text(todo.raw, encoding="utf-8")
     print(f"created {path.relative_to(root).as_posix()}")
     return written(args, [todo.rel], commit_subject(root, area, f"add {node_id} — {_oneline(args.title, 60)}"))
@@ -2078,22 +2083,30 @@ def cmd_new_exp(args) -> int:
     except CommitError as exc:
         print(f"not created — {exc}", file=sys.stderr)
         return 2
-    node_id = new_id(args, "EXP", [int(e.id[4:]) for e in graph.exps.values()], "EXP-{:04d}")
+    nums = [int(e.id[4:]) for e in graph.exps.values()]
+    date = args.date or record_today(args.root)
+    skeleton = graph.skeleton("exp")
+
+    def build(node_id: str) -> Exp:
+        path = root / "experiments" / f"{node_id}.md"
+        fm = {"id": node_id, "type": "exp", "title": args.title, "date": date, "host": host,
+              "status": "in_flight", "model": args.model or "", "commit": args.commit or "",
+              "affects": args.affects or [], "state": args.state or "n/a", "summary": args.summary or graph.labels["in_progress"]}
+        if args.arc:
+            fm["arc"] = args.arc
+        return Exp(path, fm, skeleton, rel=path.relative_to(root).as_posix())
+
+    problems = check_node(graph, "exp", build(provisional_id("EXP-{:04d}", nums)))
+    if problems:
+        return refuse(problems)
+    node_id = new_id(args, "EXP", nums, "EXP-{:04d}")
     if isinstance(node_id, int):
         return node_id
-    path = root / "experiments" / f"{node_id}.md"
+    exp = build(node_id)
+    path, fm = exp.path, exp.fm
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
         return 1
-    fm = {"id": node_id, "type": "exp", "title": args.title, "date": args.date or record_today(args.root), "host": host,
-          "status": "in_flight", "model": args.model or "", "commit": args.commit or "",
-          "affects": args.affects or [], "state": args.state or "n/a", "summary": args.summary or graph.labels["in_progress"]}
-    if args.arc:
-        fm["arc"] = args.arc
-    skeleton = graph.skeleton("exp")
-    problems = check_node(graph, "exp", Exp(path, fm, skeleton, rel=path.relative_to(root).as_posix()))
-    if problems:
-        return refuse(problems)
     path.parent.mkdir(exist_ok=True)  # the first experiment of a repository
     path.write_text(new_node_text("exp", fm, skeleton), encoding="utf-8")
     if exps is not None:  # a partial clone checks out the attachments of the EXPs it makes
@@ -2106,27 +2119,34 @@ def cmd_new_exp(args) -> int:
 def cmd_new_arc(args) -> int:
     root = args.root
     graph = load_graph(root)
-    node_id = new_id(args, "ARC", [int(a.id[4:]) for a in graph.arcs.values()], "ARC-{:03d}")
+    nums = [int(a.id[4:]) for a in graph.arcs.values()]
+    today = record_today(args.root)
+    skeleton = graph.skeleton("arc")
+
+    def build(node_id: str) -> Arc:
+        path = root / "arcs" / f"{node_id}.md"
+        fm = {"id": node_id, "type": "arc", "title": args.title, "status": args.status, "created": today, "updated": today}
+        if args.areas:
+            fm["areas"] = args.areas
+        if args.venue:
+            fm["venue"] = args.venue
+        if args.location:
+            fm["location"] = args.location
+        fm["members"] = args.members or []
+        fm["exps"] = args.exps or []
+        return Arc(path, fm, skeleton, rel=path.relative_to(root).as_posix())
+
+    problems = check_node(graph, "arc", build(provisional_id("ARC-{:03d}", nums)))
+    if problems:
+        return refuse(problems)
+    node_id = new_id(args, "ARC", nums, "ARC-{:03d}")
     if isinstance(node_id, int):
         return node_id
-    path = root / "arcs" / f"{node_id}.md"
+    arc = build(node_id)
+    path, fm = arc.path, arc.fm
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
         return 1
-    today = record_today(args.root)
-    fm = {"id": node_id, "type": "arc", "title": args.title, "status": args.status, "created": today, "updated": today}
-    if args.areas:
-        fm["areas"] = args.areas
-    if args.venue:
-        fm["venue"] = args.venue
-    if args.location:
-        fm["location"] = args.location
-    fm["members"] = args.members or []
-    fm["exps"] = args.exps or []
-    skeleton = graph.skeleton("arc")
-    problems = check_node(graph, "arc", Arc(path, fm, skeleton, rel=path.relative_to(root).as_posix()))
-    if problems:
-        return refuse(problems)
     (root / "arcs").mkdir(exist_ok=True)
     path.write_text(new_node_text("arc", fm, skeleton), encoding="utf-8")
     print(f"created {path.relative_to(root).as_posix()} — write its goal, steps and exit criteria in the body; `new exp --arc {node_id}` adds experiments")
@@ -2634,7 +2654,7 @@ def commit_paths(root: Path, rels: list[str], message: str, attempts: int = 5) -
                 _git(root, "add", "-A", "--", *present, env=env)
             tree_dir = Path(tmp) / "tree"
             graph, problems = tree_problems(tree_dir, committed=True, tracked=_materialize(root, env, tree_dir))
-            problems += unbumped(root, graph, head, env)
+            problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env)
             if problems:
                 raise CommitError("the commit would not validate on its own:\n" + "\n".join(f"  - {p}" for p in problems))
             tree = _git(root, "write-tree", "--missing-ok", env=env).strip()  # an attachment a partial clone lacks is on the upstream
@@ -3138,6 +3158,52 @@ def reserve_number(root: Path, key: str, local_max: int, fmt: str) -> int | None
     raise ReserveError(f"the number counter on {remote} kept moving ({RESERVE_ATTEMPTS} attempts)")
 
 
+def provisional_id(fmt: str, nums: list[int]) -> str:
+    """The id a new record is checked under before its number is reserved, so that a refused record reserves none."""
+    return fmt.format(max(nums, default=0) + 1)
+
+
+def _counter(root: Path) -> tuple[str, dict]:
+    """This clone's copy of the number counter: (its commit, the last number per prefix), or ("", {}) when it has none."""
+    ref = _run(root, "rev-parse", "-q", "--verify", ID_REF).stdout.strip()
+    if not ref:
+        return "", {}
+    try:
+        return ref, json.loads(_git(root, "cat-file", "blob", f"{ref}:{ID_FILE}"))
+    except (CommitError, ValueError):
+        return ref, {}
+
+
+def note_offline_number(root: Path, key: str, n: int, fmt: str) -> None:
+    """A number taken with --offline goes into this clone's copy of the counter (not pushed), so the commit check
+    knows this clone issued it; the next reservation reads the remote's counter again and goes past it."""
+    old, ids = _counter(root)
+    if not old or n <= int(ids.get(key, 0)):
+        return
+    ids[key] = n
+    blob = _git(root, "hash-object", "-w", "--stdin", stdin=json.dumps(ids, sort_keys=True) + "\n").strip()
+    tree = _git(root, "mktree", stdin=f"100644 blob {blob}\t{ID_FILE}\n").strip()
+    new = _git(root, "commit-tree", tree, "-p", old, stdin=f"offline {fmt.format(n)} ({record_host()}, {os.urandom(4).hex()})\n").strip()
+    _run(root, "update-ref", ID_REF, new, old)
+
+
+def unissued(root: Path, graph: Graph, head: str, env: dict[str, str]) -> list[str]:
+    """TODOs, experiments and arcs that the index `env` adds under a number past this clone's copy of the counter: a
+    number no `new` reserved, which another machine may take as well. A clone without an upstream or without a copy
+    of the counter reserves nothing, and nothing is checked there."""
+    _, ids = _counter(root)
+    if not head or not ids or _upstream(root) is None:
+        return []
+    added = set(_git(root, "diff-index", "--cached", "--no-renames", "--diff-filter=A", "--name-only", "-z", head, env=env).split("\0"))
+    out = []
+    for node in [*graph.todos.values(), *graph.exps.values(), *graph.arcs.values()]:
+        key, _, num = node.id.rpartition("-")
+        if node.rel in added and int(num) > int(ids.get(key, 0)):
+            out.append(f"{node.rel}: {node.id} is past the last number reserved for {key} ({ids.get(key, 0)}) — a record's number comes "
+                       f"from `new`, which reserves it on the remote; a number of one's own can be another machine's too")
+    return out
+
+
 def new_id(args, key: str, nums: list[int], fmt: str) -> str | int:
     """The id a new record takes (`fmt` like "EXP-{:04d}"): its number reserved on the upstream so that two servers
     never issue the same one; with no upstream, or with --offline, the local maximum + 1. An int is a refusal's exit code."""
@@ -3149,6 +3215,8 @@ def new_id(args, key: str, nums: list[int], fmt: str) -> str | int:
               "answers, or add --offline to take the local maximum + 1 (if another server takes the same number "
               "meanwhile, sync stops on it)", file=sys.stderr)
         return 1
+    if n is None and args.offline:
+        note_offline_number(args.root, key, local + 1, fmt)
     return fmt.format(local + 1 if n is None else n)
 
 
@@ -3176,7 +3244,7 @@ def _hook_pre_commit(root: Path) -> int:
     env = dict(os.environ)  # git names the index being committed in GIT_INDEX_FILE
     with tempfile.TemporaryDirectory(prefix="labledger-hook-") as tmp:
         graph, problems = tree_problems(Path(tmp), committed=True, tracked=_materialize(root, env, Path(tmp)))
-        problems += unbumped(root, graph, head, env)
+        problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env)
     if problems:
         print("labledger pre-commit: this commit would not validate:", *(f"  - {p}" for p in problems), f"  {HOOK_HINT}",
               sep="\n", file=sys.stderr)

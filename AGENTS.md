@@ -272,10 +272,13 @@ How commits are made:
 
 A ledger kept on several machines shares one remote, a private GitHub repository for instance.
 
-- **Numbers are reserved on the remote.** When the branch tracks an upstream, `new todo`, `new exp` and `new arc`
-  raise a counter on it (`refs/labledger/ids`), so two machines never issue the same number. When that remote cannot
-  be reached, nothing is made; `--offline` takes the local maximum + 1 instead. A branch without an upstream takes
-  the local maximum + 1. *Guidance:* numbers are not chosen by hand; gaps are fine and no number is reused.
+- **Numbers are reserved on the remote.** When the branch tracks an upstream, `new todo`, `new exp` and `new arc` raise
+  a counter on it (`refs/labledger/ids`), so two machines never issue the same number. They check the record first and
+  reserve its number only when it passes, so a refused record takes none. When that remote cannot be reached, nothing is
+  made; `--offline` takes the local maximum + 1 instead and notes it in the clone's copy of the counter. A branch
+  without an upstream takes the local maximum + 1. A commit that adds a TODO, an experiment or an arc under a number
+  past the clone's copy of the counter, which no `new` reserved, is refused. *Guidance:* gaps are fine and no number is
+  reused.
 - **Two records under one number** come only from `--offline` (another machine took the same number meanwhile), and
   they are repaired by hand. sync stops on the record's file, and only one record keeps the number. Inside
   `.git/labledger-sync/`, put the other machine's file back (`git show <remote>/<branch>:<path> > <path>`; this
