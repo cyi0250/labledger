@@ -3079,8 +3079,10 @@ def reserve_number(root: Path, key: str, local_max: int, fmt: str) -> int | None
             ids[key] = n
             blob = _git(root, "hash-object", "-w", "--stdin", stdin=json.dumps(ids, sort_keys=True) + "\n").strip()
             tree = _git(root, "mktree", stdin=f"100644 blob {blob}\t{ID_FILE}\n").strip()
+            # A token of its own: two sessions of one machine (one git identity, one second) would otherwise build the same
+            # commit, and the second push would pass as the first one's — two records under one number.
             new = _git(root, "commit-tree", tree, *(["-p", old] if old else []),
-                       stdin=f"reserve {fmt.format(n)} ({who})\n").strip()
+                       stdin=f"reserve {fmt.format(n)} ({who}, {os.urandom(4).hex()})\n").strip()
             r = _run(root, "push", "--porcelain", remote, f"{new}:{ID_REF}", env=env, timeout=PUSH_TIMEOUT)
         except subprocess.TimeoutExpired:
             raise ReserveError(f"{remote} did not answer within {PUSH_TIMEOUT} s")

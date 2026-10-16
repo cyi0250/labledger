@@ -1281,7 +1281,13 @@ def test_a_number_reserved_on_one_server_is_not_issued_on_another(grepo: Path, o
 
 
 def test_a_reservation_that_loses_the_race_reads_the_counter_again(grepo: Path, origin: Path, tmp_path: Path, monkeypatch):
+    """Two sessions of one machine race: one git identity, one host name, one second — so the two counter commits
+    differ only in what makes each reservation its own, and the second push cannot pass as the first one's."""
     other = server(origin, tmp_path / "server-b")
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@example.org")
+        monkeypatch.setenv(f"GIT_{who}_DATE", "2026-10-16T12:00:00+09:00")
     tree_max = ll._tree_max
 
     def b_reserves_meanwhile(root: Path, rev: str, key: str) -> int:  # A has read the counter, not yet pushed it
