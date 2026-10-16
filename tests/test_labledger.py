@@ -1380,6 +1380,51 @@ def test_no_number_without_the_upstream_unless_offline(grepo: Path, origin: Path
     assert run(grepo, "--offline", "--no-push", "new", "exp", "x") == 0 and (grepo / "experiments" / "EXP-0002.md").is_file()
 
 
+def read_only(top: Path) -> list[Path]:
+    """Take write permission away from `top` and everything under it; returns what to give it back to."""
+    paths = [top, *top.rglob("*")]
+    for p in paths:
+        p.chmod(p.stat().st_mode & ~0o222)
+    return paths
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only folders")
+@pytest.mark.parametrize("frozen", ["", ".git"])
+def test_a_session_that_may_not_write_the_ledger_still_reads_it(grepo: Path, origin: Path, frozen: str, capsys):
+    """An agent's sandbox may let it read the ledger and write nothing, or write the ledger's files but nothing in .git:
+    find, show, validate and review answer there, review printing its queue even where views/review.md cannot be written.
+    A command that has to write says so before it writes anything, instead of failing halfway or advising --offline."""
+    head, before = git(grepo, "rev-parse", "HEAD"), record_bytes(grepo)
+    paths = read_only(grepo / frozen)
+    try:
+        for argv in (("validate",), ("find", "first"), ("show", "LAB-001"), ("review",)):
+            assert run(grepo, *argv) == 0, argv
+        out, err = capsys.readouterr()
+        assert "# Review queue" in out and ("views/review.md not written" in err) == (frozen == "")
+        for argv in (("sync",), ("new", "exp", "x"), ("--offline", "new", "exp", "x"), ("new", "issue", "lab", "x", "--symptom", "y"),
+                     ("set", "LAB-001", "--note", "z"), ("commit", "-m", "x", "LAB-001")):
+            assert run(grepo, *argv) == 2, argv
+            err = capsys.readouterr().err
+            assert "stopped before writing anything — this session cannot write" in err and "--offline" not in err, argv
+    finally:
+        for p in paths:
+            p.chmod(p.stat().st_mode | 0o200)
+    assert record_bytes(grepo) == before and git(grepo, "status", "--porcelain") == "" and git(grepo, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into read-only folders")
+def test_views_that_cannot_be_written_hold_no_record_back(grepo: Path, capsys):
+    """views/ is this clone's convenience: a write whose views cannot be rendered is committed all the same."""
+    paths = read_only(grepo / "views")
+    try:
+        assert run(grepo, "new", "todo", "lab", "second TODO") == 0
+    finally:
+        for p in paths:
+            p.chmod(p.stat().st_mode | 0o200)
+    assert "views/ not rendered" in capsys.readouterr().err and git(grepo, "status", "--porcelain") == ""
+    assert git(grepo, "show", "--name-only", "--format=", "HEAD") == "areas/lab/LAB-002.md\n"
+
+
 def test_global_options_may_follow_the_command(grepo: Path, origin: Path, capsys):
     """`set LAB-001 --note … --no-commit` is `--no-commit set LAB-001 --note …`, and so for --root, --no-push, --offline."""
     assert ll.main(["show", "LAB-001", "--root", str(grepo)]) == 0 and "first TODO" in capsys.readouterr().out
@@ -1603,6 +1648,12 @@ def test_fetches_and_pushes_over_ssh_share_one_connection(grepo: Path, tmp_path:
     assert calls()[3:] == [check], "the next command finds the connection alive and does not start another"
 
     (tmp_path / "master").unlink()
+    (fake_ssh / "labledger-ssh.lock").unlink()
+    (fake_ssh / "labledger-ssh.lock").mkdir()  # a lock this session cannot open
+    monkeypatch.setattr(ll, "_SSH_SHARED", {})
+    assert ll._network_env(grepo, "origin")["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes -o ConnectTimeout=15", \
+        "no lock, no shared connection: git connects on its own"
+    (fake_ssh / "labledger-ssh.lock").rmdir()
     monkeypatch.setenv("SSH_DOWN", "1")
     monkeypatch.setattr(ll, "_SSH_SHARED", {})
     assert ll._network_env(grepo, "origin")["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes -o ConnectTimeout=15", \

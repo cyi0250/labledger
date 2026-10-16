@@ -25,6 +25,7 @@ import contextlib
 import csv
 import datetime as dt
 import difflib
+import errno
 import fcntl
 import importlib.util
 import io
@@ -1864,10 +1865,14 @@ def cmd_review(args) -> int:
                                                                  for n, (title, items) in enumerate(groups, 1)]}, ensure_ascii=False))
         return 0
     text = "\n".join(lines) + "\n"
-    (root / VIEWS).mkdir(exist_ok=True)
-    (root / VIEWS / "review.md").write_text(text, encoding="utf-8")
     print(text, end="")
-    print(f"(written to views/review.md)")
+    try:
+        (root / VIEWS).mkdir(exist_ok=True)
+        (root / VIEWS / "review.md").write_text(text, encoding="utf-8")
+    except OSError as exc:  # a session that may read the ledger but not write it still gets the queue
+        print(f"{VIEWS}/review.md not written ({exc.strerror}): the queue above is all of it", file=sys.stderr)
+        return 0
+    print(f"(written to {VIEWS}/review.md)")
     return 0
 
 
@@ -2762,7 +2767,11 @@ def _ssh_start(url: str) -> str | None:
             return subprocess.run([*base, "-O", "check", *target], timeout=10, **quiet).returncode == 0
         return False
 
-    with open(Path(home) / "labledger-ssh.lock", "a") as lock:
+    try:
+        lock = open(Path(home) / "labledger-ssh.lock", "a")
+    except OSError:  # a folder this session may not write: no shared connection, git connects on its own
+        return None
+    with lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # one starter at a time; the next one finds it alive
         if not alive():
             with contextlib.suppress(subprocess.TimeoutExpired):  # a master that cannot listen stays in the foreground
@@ -2857,11 +2866,16 @@ SPARSE = ("-c", "core.sparseCheckout=true", "-c", "core.sparseCheckoutCone=false
 CONFLICT_MARK_RE = re.compile(r"^(<{7}|>{7})(?: |$)", re.M)
 
 
+def git_dir(root: Path) -> Path:
+    """The clone's git directory, which its worktrees share."""
+    common = Path(_git(root, "rev-parse", "--git-common-dir").strip())
+    return common if common.is_absolute() else (root / common).resolve()
+
+
 def _sync_paths(root: Path) -> tuple[Path, Path, Path]:
     """The private worktree where local commits are replayed (never the shared working tree), the state of a replay
     that stopped (the upstream commit it replays onto, the local commits already replayed), and the lock."""
-    common = Path(_git(root, "rev-parse", "--git-common-dir").strip())
-    common = common if common.is_absolute() else (root / common).resolve()
+    common = git_dir(root)
     return common / "labledger-sync", common / "labledger-sync.json", common / "labledger-sync.lock"
 
 
@@ -3389,8 +3403,12 @@ def written(args, rels: list[str], subject: str, body: str = "") -> int:
     validated on its own tree. The record is written either way: a write left uncommitted or unpushed ends with
     UNFINISHED, never the failure of a refusal, since a rerun would write a second record."""
     args.written = rels[0]
-    if run_render(args.root, check=False):
-        print(f"{VIEWS}/ are not re-rendered until those are fixed; the record is written")
+    try:
+        if run_render(args.root, check=False):
+            print(f"{VIEWS}/ are not re-rendered until those are fixed; the record is written")
+    except OSError as exc:  # a view this session may not write: the record is committed all the same
+        print(f"{VIEWS}/ not rendered ({exc.strerror}: {exc.filename}); the record is written — `render` rebuilds them",
+              file=sys.stderr)
     return 0 if autocommit(args, rels, subject, body) else UNFINISHED
 
 
@@ -3903,10 +3921,48 @@ def main(argv: list[str]) -> int:
     args.root = args.root.resolve()
     if args.json and args.cmd == "new":  # stdout holds the record made, as one JSON line; what is said along the way goes to stderr
         with contextlib.redirect_stdout(sys.stderr):
-            rc = args.func(args)
+            rc = run_command(args)
         made = getattr(args, "written", None)
         print(json.dumps({"address": address_of(made), "file": made, "exit": rc} if made else {"exit": rc}, ensure_ascii=False))
         return rc
+    return run_command(args)
+
+
+def unwritable(folder: Path) -> str | None:
+    """Why this session may not write into `folder`, or None when it may."""
+    try:
+        tempfile.TemporaryFile(dir=folder).close()
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            return exc.strerror
+    return None
+
+
+def unwritable_place(args) -> tuple[Path, str] | None:
+    """The first place the command writes that this session may not, with the reason: the ledger's folder for a command
+    that writes files, and in a git clone its .git for one that commits, syncs or takes a number."""
+    check = getattr(args, "check", False)
+    places = [args.root] if args.cmd in ("new", "set", "resolve", "promote", "attachments") or (
+        args.cmd in ("render", "fmt") and not check) else []
+    if args.cmd in ("new", "set", "resolve", "promote", "attachments", "commit", "sync"):
+        with contextlib.suppress(CommitError):  # not a git clone: nothing is committed there
+            places.append(git_dir(args.root))
+    for place in places:
+        why = unwritable(place)
+        if why:
+            return place, why
+    return None
+
+
+def run_command(args) -> int:
+    """The command, once this session is known to be able to write where it will: an agent's sandbox may let a session
+    read the ledger and write nothing, or nothing in .git, and the session hears so before anything is written."""
+    stop = unwritable_place(args)
+    if stop:
+        print(f"stopped before writing anything — this session cannot write {stop[0]} ({stop[1]}). A session that may read "
+              "the ledger but not write it (an agent's sandbox) can still run find, show, review and validate; run this "
+              "command where the ledger and its .git can be written", file=sys.stderr)
+        return 2
     return args.func(args)
 
 

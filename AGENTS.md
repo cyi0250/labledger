@@ -91,7 +91,8 @@ How the records fit together. The tool computes what this describes; the advice 
 Tables and lists live in `views/` on each clone and are never committed (the hooks and CI refuse a commit holding
 `views/`): `render` writes `views/index.md` (every TODO), `views/areas.md` (areas and arcs), `views/areas/<area>.md`,
 `views/log.md` (every experiment), `views/papers.md`, `views/active.md` and `views/state/<name>.md`; `review` writes
-`views/review.md`. The write commands render on their own; after a pull or another session's write, `render` brings
+`views/review.md`, and prints its queue even where it cannot write the file. The write commands render on their own,
+and commit the record even when a view cannot be written; after a pull or another session's write, `render` brings
 `views/` up to date.
 
 ## Numbers and the data behind them
@@ -186,14 +187,19 @@ Every command ends with one of four exit codes, and says what went wrong on stde
 | Code | Meaning |
 |---|---|
 | 0 | done: written, committed and pushed, as far as the clone and the options allow |
-| 1 | a check found problems: validate, a refused `commit`, a stopped `sync`, a number not reserved, `find` with no match |
-| 2 | nothing was written: a usage error, a rule the record would break, an unknown address |
+| 1 | a check found problems: validate, a refused `commit`, a stopped `sync`, a number the remote did not reserve, `find` with no match |
+| 2 | nothing was written: a usage error, a rule the record would break, an unknown address, a session that cannot write where the command writes |
 | 3 | the record is written but not committed, or committed but not pushed: do not run the command again, which would write a second record; `commit` it, or let `sync` push it |
 
 `find`, `show`, `review` and `validate` take `--json` and print one JSON object instead of text: the matches; a record's
 head and body with what the tool computes about it (a TODO's inbound records, an arc's members); each review group's
 addresses (without writing `views/review.md`); the verdict, the problems and the record counts. `new … --json` prints
 the record it made as `{"address", "file", "exit"}` and sends everything else to stderr.
+
+A session that may read the ledger but not write it or its .git, such as an agent's sandbox, runs `find`, `show`,
+`review` and `validate` as anywhere else. A command that writes checks first that the session can write where it will,
+the ledger's folder and, in a git clone, its .git, and otherwise stops with code 2 before writing anything: the write
+commands, `commit`, `sync`, `attachments`, and `render` or `fmt` without `--check`.
 
 1. **The agent empties the review queue**, recording each judgment as its group says ([Review queue](#review-queue)).
 2. **An experiment starts with `new exp`** and ends with `set EXP-NNNN --status final --summary … --data …`, adding
