@@ -105,15 +105,18 @@ A reader checks a number by opening the table it was computed from.
 - **The body links every file `data` names**, where its numbers are used:
   `[results.csv](attachments/EXP-NNNN/results.csv)`.
 - **A table `data` names reads as one.** It is UTF-8 text with a header row, each column named once and not by a
-  number, and every row as wide as the header. No cell holds a comma list of numbers (`1,2,3`), a number with
-  thousands separators (`1,786,215`) or a fraction of whole numbers (`0/3024`). A column that holds only numbers ends
+  number, and every row as wide as the header. No cell holds a list of numbers (`1,2,3`, `1;2;3`, `[1, 2, 3]`,
+  `(0, 0, 0)`), a number with thousands separators (`1,786,215`) or a fraction of whole numbers (`0/3024`). A column that holds only numbers ends
   its name with their unit in brackets: `latency[ms]`; `[1]` for a count or a ratio; `[id]` for numbers that name
   things (a run, a seed). A JSON file only has to parse. These checks read the file wherever it is on disk: in
   validate, and when a commit that holds it is made. Where it is not on disk (a partial clone, CI), validate checks
   only that git has it.
-- *Guidance:* one plain value per cell, of any kind (`1;2;3` passes the check and is still a list). Large leftovers of
-  a run (logs, traces, archives) may sit in the attachment folder too, or outside the ledger: `data` names the tables
-  the reported numbers come from, not everything a run left behind.
+- *Guidance:* one plain value per cell, of any kind: the check sees lists of numbers only, so `a, b` or `0.5/3` pass it
+  and are still not one value. Large leftovers of a run (logs, traces, archives) may sit in the attachment folder too,
+  or outside the ledger: `data` names the tables the reported numbers come from, not everything a run left behind.
+- *Guidance:* to give an existing table its units, append them to the original column names (`cycles` →
+  `cycles[cycles]`). `sed '1s/\[[^]]*\]//g' <file>` then gives back the original file byte for byte, for the scripts
+  and checksum lists that expect it.
 
 **Links.** A relative link in the body of a record or of a Markdown state table points at a file or folder of the
 ledger. It is not an absolute path, it does not leave the ledger (name another repository's file in text: repository,

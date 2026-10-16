@@ -481,6 +481,9 @@ def test_a_final_experiment_names_the_tables_its_numbers_come_from(repo: Path, c
     for text, problem in (("model,latency\nresnet,12.5\n", "column `latency` holds numbers: end its name with their unit"),
                           ('model,cycles[1]\nresnet,"1,786,215"\n', "column `cycles[1]` has `1,786,215` in one cell"),
                           ("model,passed[1]\nresnet,0/3024\n", "column `passed[1]` has `0/3024` in one cell"),
+                          ('model,cycles[1]\nresnet,"[1200, 1215]"\n', "column `cycles[1]` has `[1200, 1215]` in one cell"),
+                          ('model,mismatches[1]\nresnet,"(0, 0, 0)"\n', "column `mismatches[1]` has `(0, 0, 0)` in one cell"),
+                          ("model,runs[1]\nresnet,3;4;5\n", "column `runs[1]` has `3;4;5` in one cell"),
                           ("model,latency[ms]\nresnet,12.5,3\n", "row 2 has 3 fields, the header 2"),
                           ("resnet,12.5\nmobilenet,4.25\n", "the first row must be a header")):
         table.write_text(text, encoding="utf-8")
