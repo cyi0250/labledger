@@ -9,9 +9,10 @@ observations and decisions, one Markdown file per record in a git repository, ch
   experiments left in flight, issues nobody touched for two months.
 - **Agents record on their own.** A skill named as you call the ledger leads them to it whenever their work produces
   something to keep, and tells them which command records it.
-- **Agents follow one rulebook.** [`AGENTS.md`](AGENTS.md) holds every rule, and the tool checks the form of each one:
-  `validate`, the write commands before they write, and every commit made through the tool or its hooks. What no
-  tool can check is marked as guidance. The write commands then commit and push what they wrote.
+- **Agents follow one rulebook.** [`AGENTS.md`](AGENTS.md) holds the rules every session uses, and points to
+  [`MACHINES.md`](MACHINES.md) and [`SETUP.md`](SETUP.md) for the cases only some sessions meet. The tool checks the
+  form of each rule: `validate`, the write commands before they write, and every commit made through the tool or its
+  hooks. What no tool can check is marked as guidance. The write commands then commit and push what they wrote.
 - **Nothing to install.** One script: Python 3.9 or newer with its standard library alone, on Linux or macOS, and git
   2.28 or newer. Tables are rendered into a local `views/` folder that is never committed, so machines writing at
   once do not collide.
@@ -50,6 +51,7 @@ experiments/EXP-NNNN.md          an experiment; its files are in experiments/att
 arcs/ARC-NNN.md                  work spanning several TODOs and experiments: a paper, a release
 state/<name>.csv                 the current values, each from a final experiment
 <ledger>.yml, templates/         the ledger's time zone, language, body skeletons and words (optional)
+AGENTS.md, MACHINES.md, SETUP.md the rulebook: every session, several machines, setup and settings
 views/                           tables rendered on each clone (gitignored)
 ```
 

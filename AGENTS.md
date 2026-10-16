@@ -2,9 +2,13 @@
 
 This repository is a **ledger**: the plans, experiments, observations and decisions of a project, one Markdown file per
 record, kept by the people and the AI agents who do the work. `scripts/labledger.py` writes the records, checks them
-and builds the tables. This file is the only rulebook. Every rule here is checked by the tool: by `validate`, by a
-write command before it writes, or when a commit is made. What the tool cannot check is marked *guidance* and says
-why it is there. A check sees the form of a record, not its meaning: that a note is filled, not that it says why.
+and builds the tables. This file holds the rules every session uses. Two more hold what only some sessions meet, each
+read when its case comes up: [MACHINES.md](MACHINES.md) when the ledger is kept on more than one machine (numbers, a
+`sync` that stopped, partial clones, SSH), and [SETUP.md](SETUP.md) to set up the ledger or its skill, to change its
+settings (`labledger.yml`: time zone, commit prefix, language) or templates, or to change the tool. Every rule in the
+three files is checked by the tool: by `validate`, by a command before it writes, or when a commit is made or pushed.
+What the tool cannot check is marked *guidance* and says why it is there. A check sees the form of a record, not its
+meaning: that a note is filled, not that it says why.
 
 **Every write command commits what it wrote, and pushes it when the branch tracks a remote.** Nobody is asked before a
 record is committed (see [Commits](#commits)).
@@ -215,7 +219,7 @@ commands, `commit`, `sync`, `attachments`, and `render` or `fmt` without `--chec
    concluded --summary … --affects …`.
 7. **A decision is made with `new decision`**, under `--area` when it belongs to one area. An observation is `new
    issue`; what settled it, `resolve issue --by …`.
-8. **Numbers come from `new`**, never from a hand-made file name ([Other machines](#other-machines)).
+8. **Numbers come from `new`**, never from a hand-made file name ([MACHINES.md](MACHINES.md#numbers)).
 9. **validate is green before the turn ends**, and hand edits are committed in the turn that finishes them.
 
 ## Review queue
@@ -265,113 +269,12 @@ How commits are made:
 - **Each commit is pushed** to the branch's upstream. A push that fails (no network, no answer within 60 s) leaves the
   commit local, and the next commit pushes it. `--no-push` commits without pushing.
 - **`sync` brings in what other machines pushed**, and the tool runs it when a push is refused because another machine
-  pushed first. It fetches, replays this clone's own commits one by one on top of the remote's in a private worktree
-  (`.git/labledger-sync`, validating each), moves the branch, rewrites only the files that changed, and pushes.
-  Replayed commits get new ids. When sync stops, it moves nothing and says why:
-  - both sides changed the same lines: merge the files it names inside `.git/labledger-sync/` (keep both records,
-    delete the `<<<<<<<` `=======` `>>>>>>>` lines), then `sync`; when both added a record under one number, see
-    [Other machines](#other-machines);
-  - a replayed commit does not validate (two machines made the same `dec:` address): fix it there, then `sync`;
-  - an incoming file has uncommitted changes here: commit them, then `sync`;
-  - `sync --abort` drops the stopped replay; the branch and the local commits stay as they were.
+  pushed first. It replays this clone's own commits on top of the remote's, so they get new ids. When it stops, it
+  moves nothing and says why; [MACHINES.md](MACHINES.md#sync) has the common cases.
 - *Guidance:* several sessions may share one working tree. Do not use `git add -A`, `git commit -a`, `git pull`,
   `git rebase` or `git stash`: each takes in or rewrites another session's uncommitted files. Do not skip the hooks
   with `--no-verify`, and do not rewrite pushed history with `git push --force`. Cite a commit id once it is pushed,
   since a replay changes the ids of commits that were not.
-
-## Other machines
-
-A ledger kept on several machines shares one remote, a private GitHub repository for instance.
-
-- **Numbers are reserved on the remote.** When the branch tracks an upstream, `new todo`, `new exp` and `new arc` raise
-  a counter on it (`refs/labledger/ids`), so two machines never issue the same number. They check the record first and
-  reserve its number only when it passes, so a refused record takes none. When that remote cannot be reached, nothing is
-  made; `--offline` takes the local maximum + 1 instead and notes it in the clone's copy of the counter. A branch
-  without an upstream takes the local maximum + 1. A commit that adds a TODO, an experiment or an arc under a number
-  past the clone's copy of the counter, which no `new` reserved, is refused. *Guidance:* gaps are fine and no number is
-  reused.
-- **Two records under one number** come only from `--offline` (another machine took the same number meanwhile), and
-  they are repaired by hand. sync stops on the record's file, and only one record keeps the number. Inside
-  `.git/labledger-sync/`, put the other machine's file back (`git show <remote>/<branch>:<path> > <path>`; this
-  machine's version stays in `git show CHERRY_PICK_HEAD:<path>`), write this machine's record under a new number
-  (`new … --no-commit` reserves one: delete the file it writes), change its `id` and H1, then `sync`. That fixes the
-  commit that made the record. The local commits after it are replayed as they are: whatever they put under the old
-  number (a mention, a `state` row, an attachment, which the private worktree never holds) now belongs to the other
-  machine's record and moves to the new number in a commit after sync. `git log -p @{u}..` in the clone lists those
-  commits before sync resumes. *Guidance:* use `--offline` only when the remote cannot be reached.
-- **Each machine has a name**: `LABLEDGER_HOST` when it is set (in the shell profile), else the host name up to its
-  first dot. `new exp` writes it into `host`, the machine whose local paths the body names (`--host` names another,
-  for a run made elsewhere), and the counter's log records it. On a machine called `localhost`, `new exp` without
-  `--host` and every number reservation refuse to run until `LABLEDGER_HOST` is set.
-- **Dates.** Write commands stamp today in `timezone` from `labledger.yml`, or in each machine's own time zone when
-  that names none. *Guidance:* a ledger written from several time zones names one.
-- **A shared SSH connection** is opt-in. With `LABLEDGER_SSH_SHARE=1`, the tool keeps one connection per remote host
-  open for 10 minutes after its last use (a background `ssh -N` with the socket `labledger-%C` in `$XDG_RUNTIME_DIR`
-  or `~/.ssh`), and the fetches and pushes of one command share one handshake. `ControlMaster` in `~/.ssh/config` does
-  the same for every program.
-- **A machine that does not need the attachments** clones without them:
-
-  ```bash
-  git clone --filter=blob:limit=1m --no-checkout <remote> ledger
-  cd ledger
-  git config core.sparseCheckout true
-  git config core.sparseCheckoutCone false
-  printf '/*\n!/experiments/attachments/\n' > .git/info/sparse-checkout
-  git checkout main
-  ```
-
-  validate and the commit checks find the attachments it lacks in git's index. `attachments EXP-NNNN …` brings those
-  EXPs' folders in and keeps them; the folders of the EXPs this clone makes are there from the start. `commit` refuses
-  a path that reaches attachments left off disk, which would commit their deletion. The sparse-checkout file holds the
-  two lines above and the `/experiments/attachments/EXP-NNNN/` lines `attachments` adds; `new exp`, `commit` and
-  `sync` stop on any other form. *Guidance:* do not use `git sparse-checkout set|add|init`, which rewrite the file and
-  the clone's config.
-
-## Settings and templates
-
-- **`labledger.yml`** (optional) holds `key: value` lines. `timezone` is an IANA name such as `Europe/Berlin`
-  (default: each machine's own zone). `commit_prefix` is the first word of the commit messages write commands make
-  (default: the ledger's name, `labledger`), one word of `A-Z a-z 0-9 . _ -`. `language` names the language the
-  records are written in, which the skill asks agents to write in (default: none named; setup reads it when it writes
-  the skill).
-- **`templates/<kind>.md`** replaces the body a new record of that kind starts with: `todo`, `exp`, `arc`, `inv` or
-  `area`.
-- **`templates/labels.yml`** replaces the words commands write into records: `symptom path hypothesis blocking` (`new
-  issue`), `context decision why` (`new decision`), `resolved promoted` (the line `resolve` and `promote` add),
-  `evidence closed_by` (a close decision; `closed_by` holds `{evidence}`) and `in_progress` (a new experiment's
-  summary). Review group 3 looks for the `resolved` word.
-- validate refuses an unknown setting, label or template file, and a time zone this machine does not know.
-
-## Setup and the skill
-
-`setup` starts a ledger and puts its skill on a machine. Without the answers it needs, it prints the questions to ask
-the user, each with the answer it recommends on this machine (and the answers already given), and does nothing else: the
-agent running it asks them, then runs it again with the answers.
-
-- **In the tool's source repository it makes a new ledger**: `setup --name <ledger> --path <new folder> --remote <git
-  URL | none> --timezone <zone> --language <language> --agents <agent …>`. The ledger gets the tool, its hooks, its
-  tests and CI, `AGENTS.md`, `CLAUDE.md` and `.gitignore`, with the source's name in them replaced by the new one, in
-  capitals too: `scripts/<ledger>.py`, `<ledger>.yml`, `<LEDGER>_HOST`, `refs/<ledger>/ids`, commit messages
-  `<ledger>(…)`. A ledger in another language than English also gets the English skeletons and words in `templates/`, to
-  translate. setup commits the ledger, pushes it, turns its hooks on and installs the skill.
-- **What setup refuses before it makes anything**: a name that is not 2 to 32 lowercase letters and digits starting with
-  a letter; a name that a skill in any agent's folder, a command on PATH, a Python module or a namespace of git's own
-  refs (`heads`, `tags`, `notes`, …) already answers to; a folder that is not empty; a remote that cannot be reached or
-  is not empty. It recommends `ledger`, else the first of `labbook`, `logbook` and `worklog` that is free. *Guidance:*
-  the name is a word the user says for this ledger alone, not one of their agents' own commands (`review`, `init`),
-  which setup does not know.
-- **In a ledger it installs that ledger's skill on this machine**: clone the ledger, then `python3 scripts/<ledger>.py
-  setup --agents <agent …>`. Run it again after `language` or `commit_prefix` changes, on every machine.
-- **The skill is `<skills folder>/<ledger>/SKILL.md`**, one file per folder the chosen agents read: Claude Code
-  (`claude`) reads `~/.claude/skills`, and Codex, OpenCode, Gemini CLI, Copilot and Cursor (`codex`, `opencode`,
-  `gemini`, `copilot`, `cursor`) read `~/.agents/skills`. Its name and description lead an agent to it when the user
-  names the ledger or one of its records, when a run produced numbers, when something was decided, when a defect turned
-  up, when work is left for later, and before work the ledger may already hold. Its body says what to record and with
-  which command, by the tool's path on this machine, which Claude Code then runs without asking while the skill is in
-  use; it asks for records in `language`. setup writes it again each time it runs with `--agents`, and never replaces a
-  skill of that name that is not this ledger's.
-- **A ledger without a remote** is kept on one machine: its write commands commit without pushing, its numbers are the
-  local maximum + 1, and `sync` has nothing to do.
 
 ## What goes where
 
@@ -389,11 +292,3 @@ agent running it asks them, then runs it again with the answers.
 | a current value changed | (editor) its row in `state/<name>.csv`, then `set EXP-NNNN --state "<every table it is the source of>"` and `commit` both | `state/` |
 | a new area of work | `new area <id> "<title>" --prefix <PREFIX>` | `areas/<id>/README.md` |
 | where is it? | `find <keywords…> [--kind] [--status] [--body]`, `show <address>` | — |
-
-## The tool
-
-`scripts/labledger.py` needs Python 3.9 or newer with its standard library alone, Linux or macOS (it locks files with
-`fcntl`), and git 2.28 or newer (tested with 2.34). After changing it, `python3 -m pytest tests` passes: each test
-builds a small ledger in a temporary folder and runs commands on it; in the tool's source repository one also validates
-`examples/demo` and one makes a ledger with `setup`. This ledger
-itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.

@@ -12,10 +12,11 @@ Every record is a Markdown file whose frontmatter is the source of truth:
   state/*.md, state/*.csv                                the current best-known values, each citing its EXP
 Tables and lists are generated into views/ on each clone (never committed): `render` rebuilds them.
 
-AGENTS.md is the rulebook; `validate` checks every rule it states. Write commands (new, set, resolve, promote) edit
-frontmatter only, refuse a record that would not validate, then commit what they wrote and push it when the branch
-tracks an upstream. Bodies are edited by hand and committed with `commit`. labledger.yml sets the ledger's time zone and
-commit message prefix; templates/ replaces the body skeletons and the words commands write into records.
+AGENTS.md is the rulebook, with MACHINES.md and SETUP.md for the cases only some sessions meet; `validate` checks
+every rule they state. Write commands (new, set, resolve, promote) edit frontmatter only, refuse a record that would
+not validate, then commit what they wrote and push it when the branch tracks an upstream. Bodies are edited by hand
+and committed with `commit`. labledger.yml sets the ledger's time zone and commit message prefix; templates/
+replaces the body skeletons and the words commands write into records.
 """
 
 from __future__ import annotations
@@ -2559,7 +2560,7 @@ def cmd_set(args) -> int:
 # ───────────────────────────── commit ─────────────────────────────
 
 ATTACHMENTS = "experiments/attachments/"
-# A partial clone (AGENTS.md, "Other machines") checks out everything but the attachments, less the attachment directories of
+# A partial clone (MACHINES.md, "A clone without the attachments") checks out everything but the attachments, less the attachment directories of
 # the EXPs it made or brought in with `attachments`: its sparse-checkout file is SPARSE_BASE, then SPARSE_EXP_RE lines.
 SPARSE_BASE = ("/*", f"!/{ATTACHMENTS}")
 SPARSE_EXP_RE = re.compile(rf"^/{re.escape(ATTACHMENTS)}(EXP-\d{{4,}})/$")
@@ -2613,7 +2614,7 @@ def sparse_exps(root: Path) -> set[str] | None:
     cone = _run(root, "config", "--bool", "core.sparseCheckoutCone").stdout.strip() == "true"
     if cone or tuple(lines[:2]) != SPARSE_BASE or not all(SPARSE_EXP_RE.match(l) for l in lines[2:]):
         raise CommitError(f"this clone's sparse checkout is not the one labledger.py knows — non-cone mode, and in {path} "
-                          f"`/*`, `!/{ATTACHMENTS}`, then `/{ATTACHMENTS}EXP-NNNN/` lines (AGENTS.md, Other machines)")
+                          f"`/*`, `!/{ATTACHMENTS}`, then `/{ATTACHMENTS}EXP-NNNN/` lines (MACHINES.md, A clone without the attachments)")
     return {SPARSE_EXP_RE.match(l).group(1) for l in lines[2:]}
 
 
@@ -2937,7 +2938,7 @@ def _replay_onto(root: Path, onto: str) -> tuple[Path, dict]:
 def _stopped(wt: Path, what: str, items: list[str]) -> str:
     return (f"not synced — {what}:\n" + "".join(f"  - {i}\n" for i in items)
             + f"  fix the files in {wt}/, then run `python3 scripts/labledger.py sync` again (`sync --abort` gives the replay up);"
-            + " the local commits stay local until then")
+            + " the local commits stay local until then; see MACHINES.md, Sync")
 
 
 def _replay(root: Path, wt: Path, replay: dict, commits: list[str]) -> str | None:
@@ -3519,7 +3520,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9]{1,31}$")  # a file name, a Python module, 
 NAME_CHOICES = ("ledger", "labbook", "logbook", "worklog")  # setup recommends the first one nothing on the machine answers to
 GIT_REF_SPACES = ("heads", "tags", "remotes", "notes", "replace", "stash", "bisect", "prefetch", "rewritten", "worktree")
 LEDGER_FILES = ("scripts/labledger.py", "scripts/hooks/pre-commit", "scripts/hooks/pre-push", "tests/test_labledger.py",
-                ".github/workflows/validate.yml", "AGENTS.md", "CLAUDE.md", ".gitignore")  # what a new ledger is made of
+                ".github/workflows/validate.yml", "AGENTS.md", "MACHINES.md", "SETUP.md", "CLAUDE.md", ".gitignore")  # what a new ledger is made of
 AGENT_SKILLS = {  # agent: a folder of its user's skills it reads, and the folder that is there once the agent is installed
     "claude": ("~/.claude/skills", "~/.claude"),  # Claude Code reads its own folder only
     "codex": ("~/.agents/skills", "~/.codex"),  # the others all read the shared one
@@ -3685,7 +3686,7 @@ def make_ledger(path: Path, name: str, timezone: str, language: str, remote: str
     _git(path, "init", "-q", "-b", "main")
     _git(path, "add", "--", *files)
     _git(path, "commit", "-q", "-m", f"{name}: start the ledger")
-    print(f"made the ledger {name} in {path}: scripts/{name}.py, {name}.yml, AGENTS.md, the hooks, the tests and CI")
+    print(f"made the ledger {name} in {path}: scripts/{name}.py, {name}.yml, the rulebook, the hooks, the tests and CI")
     if remote:
         _git(path, "remote", "add", "origin", remote)
         try:  # before the hooks are on: the first push would run the test suite of a tool copied as it is

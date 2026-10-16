@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1475,7 +1476,7 @@ def test_a_commit_that_renames_a_record_leaves_the_index_clean(grepo: Path):
 
 
 def partial_server(origin: Path, path: Path) -> Path:
-    """Another server's clone as AGENTS.md (Other machines) makes it: no blob over 1 MB fetched, no attachment on disk."""
+    """Another server's clone as MACHINES.md makes it: no blob over 1 MB fetched, no attachment on disk."""
     git(origin, "config", "uploadpack.allowFilter", "true")  # GitHub serves partial clones; a bare repo must be told to
     git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
     git(path.parent, "clone", "-q", "--filter=blob:limit=1m", "--no-checkout", f"file://{origin}", str(path))
@@ -1717,6 +1718,8 @@ def test_setup_asks_first_then_makes_a_ledger_under_the_chosen_name_with_a_skill
     assert "Translate each templates/<kind>.md" in capsys.readouterr().out
     assert subprocess.run(["git", "-C", str(path), "grep", "-qi", "labledger"]).returncode == 1, "every file carries the new name"
     assert git(path, "log", "--format=%s") == "labnotes: start the ledger\n" and git(remote, "rev-parse", "main") == git(path, "rev-parse", "HEAD")
+    linked = re.findall(r"\]\(([^)#]+\.md)", (path / "AGENTS.md").read_text(encoding="utf-8"))
+    assert linked and all((path / f).is_file() for f in linked), "the rest of the rulebook comes along"
     tool = path / "scripts" / "labnotes.py"
     skill = (shared / "labnotes" / "SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---\nname: labnotes\n") and f"python3 {tool} *" in skill and "Write the records in Korean." in skill
