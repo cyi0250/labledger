@@ -1711,7 +1711,7 @@ def test_setup_asks_first_then_makes_a_ledger_under_the_chosen_name_with_a_skill
     out = capsys.readouterr().out
     assert "--name:" not in out and "--name labnotes --path ~/labnotes --remote none --timezone Europe/Berlin" in out, "answers given stay"
     for name, why in (("ledger", "a skill"), ("json", "a Python module"), ("git", "a command"), ("Notes", "lowercase"),
-                      ("notes", "git's own refs")):
+                      ("notes", "git's own refs"), (ll.SOURCE_NAME, "the tool's own name")):
         assert ll.main(["setup", "--name", name, "--remote", str(remote), *answers]) == 2
         assert why in capsys.readouterr().err, name
     assert ll.main(["setup", "--name", "labnotes", "--remote", str(used), *answers]) == 2

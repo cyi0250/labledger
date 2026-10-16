@@ -3650,6 +3650,8 @@ def name_taken(name: str, dirs) -> list[str]:
     if not NAME_RE.match(name):
         return ["not 2 to 32 lowercase letters and digits starting with a letter"]
     out = skills_taken(name, dirs, None)
+    if name == SOURCE_NAME:
+        out.append("the tool's own name: a ledger called so would act as the tool's source, not as a ledger")
     if name in GIT_REF_SPACES:
         out.append(f"a namespace of git's own refs: the number counter refs/{name}/ids would land in it")
     spec = importlib.util.find_spec(name)
