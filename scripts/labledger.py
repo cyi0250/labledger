@@ -3212,7 +3212,8 @@ def reserve_number(root: Path, key: str, local_max: int, fmt: str) -> int | None
             _run(root, "update-ref", ID_REF, new)
             return n
         if "[rejected]" not in r.stdout:  # not a race lost to another server's push: the remote refused it, or no answer
-            raise ReserveError(f"cannot push the number counter to {remote}: {f'{r.stderr} {r.stdout}'.strip()[-400:]}")
+            lines = [l for l in f"{r.stderr}\n{r.stdout}".splitlines() if l.strip()]  # the remote's reason comes first
+            raise ReserveError(f"cannot push the number counter to {remote}:\n  " + "\n  ".join(lines[-12:] or ["git push failed"]))
     raise ReserveError(f"the number counter on {remote} kept moving ({RESERVE_ATTEMPTS} attempts)")
 
 

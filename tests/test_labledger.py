@@ -1346,12 +1346,16 @@ def test_a_reservation_that_loses_the_race_reads_the_counter_again(grepo: Path, 
     assert not (grepo / "experiments" / "EXP-0002.md").exists()
 
 
-def test_a_remote_that_refuses_the_counter_is_not_taken_for_a_race(grepo: Path, origin: Path, capsys):
+def test_a_remote_that_refuses_the_counter_is_not_taken_for_a_race(grepo: Path, origin: Path, tmp_path: Path, capsys):
     """A remote that refuses the counter's push (a hook, permissions) says why at once, instead of being retried as a
     race lost to another server and reported as a counter that kept moving."""
     hook = origin / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\necho 'counter pushes are not allowed here' >&2\nexit 1\n", encoding="utf-8")
     hook.chmod(0o755)
+    far = tmp_path / ("a-remote-far-away-" * 8) / "origin.git"  # git names the remote's path in its reply, more than once
+    far.parent.mkdir()
+    origin.rename(far)
+    git(grepo, "remote", "set-url", "origin", str(far))
     assert run(grepo, "new", "exp", "x") == 1
     err = capsys.readouterr().err
     assert "counter pushes are not allowed here" in err and "kept moving" not in err
