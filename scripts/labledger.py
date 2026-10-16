@@ -24,6 +24,7 @@ import argparse
 import contextlib
 import csv
 import datetime as dt
+import difflib
 import fcntl
 import importlib.util
 import io
@@ -403,7 +404,9 @@ class Exp:
         for item in self.fm.get("affects") or []:
             m = LINK_ID_RE.match(item.strip())
             if m is None:
-                raise FrontmatterError(f"{self.rel}: bad affects entry `{item}`")
+                raise FrontmatterError(f"{self.rel}: bad affects entry `{item}` — an experiment's affects names the TODOs and "
+                                       "EXPs it moved, as `ID: note`" + (f"; the issue it settled takes `resolve issue "
+                                       f"{item.strip()[6:].split(':')[0]} --by {self.id}`" if item.strip().startswith("issue:") else ""))
             out.append((m.group(1), (m.group(2) or "").strip()))
         return out
 
@@ -761,6 +764,19 @@ def index_mentions(graph: Graph) -> None:
 # Everything that turns text into a record goes through resolve_address. Accepted forms:
 #   TODO ID · EXP-NNNN · ARC-NNN (case-insensitive) · <area> · inv:<id> or the bare inv id
 #   · dec:<date>-<slug> · issue:<slug> or the bare slug · arc:ARC-NNN
+
+def did_you_mean(graph: Graph, text: str) -> str:
+    """` — did you mean …?` for an address that names nothing: the records of its kind whose name starts or ends with it
+    (an investigation or a decision named without its date), else the closest spellings."""
+    raw = text.strip()
+    addresses = [*graph.todos, *graph.exps, *graph.arcs, *graph.areas, *(f"inv:{k}" for k in graph.invs),
+                 *(f"dec:{k}" for k in graph.decisions_by_id), *(f"issue:{k}" for k in graph.issues_by_slug)]
+    tag, _, target = raw.rpartition(":") if TAG_RE.match(raw) else ("", "", raw)
+    near = [a for a in addresses if a.startswith(f"{tag}:" if tag else "") and target and a != raw
+            and (a.split(":")[-1].startswith(target) or a.split(":")[-1].endswith(target))]
+    near = near or difflib.get_close_matches(raw, addresses, n=3, cutoff=0.6)
+    return f" — did you mean {', '.join(near[:3])}?" if near else ""
+
 
 def resolve_address(graph: Graph, text: str):
     """(kind, record) for an address — kind is todo/exp/arc/inv/area/dec/issue — or None."""
@@ -1287,9 +1303,9 @@ def cmd_fmt(args) -> int:
     changed = planned_formats(graph)
     if args.check:
         if changed:
-            print("node heads are not canonical (run `python3 scripts/labledger.py fmt`):")
-            for p in changed:
-                print(f"- {p.relative_to(root).as_posix()}")
+            print("record heads are not canonical (run `python3 scripts/labledger.py fmt`):")
+            for p, text in changed.items():
+                print(f"- {p.relative_to(root).as_posix()}: {first_difference(p.read_text(encoding='utf-8'), text)}")
             return 1
         print("node heads are canonical")
         return 0
@@ -1399,7 +1415,7 @@ def table_problems(path: Path) -> list[str]:
     for j, name in enumerate(header):
         cells = [r[j].strip() for r in rows[1:] if j < len(r) and r[j].strip()]
         if cells and all(NUMBER_RE.match(c) for c in cells) and name and not UNIT_RE.search(name):
-            out.append(f"column `{name}` holds numbers: end its name with their unit in brackets, like `{name}[ms]` — `[1]` for a "
+            out.append(f"column `{name}` holds numbers: end its name with their unit in brackets, like `{name}[<unit>]` (`[ms]`, `[MB]`) — `[1]` for a "
                        f"count or a ratio, `[id]` for numbers that name things (a run, a seed)")
         several = next((c for c in cells if SEVERAL_VALUES_RE.match(c)), None)
         if several:
@@ -1540,7 +1556,8 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
         out.append(f"{rel}: updated < date")
     status, note = fm.get("status"), fm.get("status_note")
     if note and len(str(note)) > STATUS_NOTE_MAX:
-        out.append(f"{rel}: status_note longer than {STATUS_NOTE_MAX} chars — say why the status is what it is; the results stay in their records")
+        out.append(f"{rel}: status_note is {len(str(note))} chars, over {STATUS_NOTE_MAX} — say why the status is what it is; the results "
+                   "stay in their records")
     if kind == "todo":
         if fm.get("priority") not in PRIORITIES:
             out.append(f"{rel}: priority `{fm.get('priority')}` not in {PRIORITIES}")
@@ -1559,7 +1576,7 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
                 out.append(f"{rel}: supersedes {ref} but {ref} is still `{target.fm.get('status')}` (close it as done/dropped)")
     elif kind == "exp":
         if len(str(fm.get("summary", ""))) > SUMMARY_MAX:
-            out.append(f"{rel}: summary longer than {SUMMARY_MAX} chars — move detail into the body")
+            out.append(f"{rel}: summary is {len(str(fm['summary']))} chars, over {SUMMARY_MAX} — move detail into the body")
         if fm.get("host") and not HOST_RE.match(str(fm["host"])):
             out.append(f"{rel}: host `{fm['host']}` is not a host name (the server whose local paths the body names)")
         claims = state_claims(fm.get("state"))
@@ -1568,7 +1585,8 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
                        f"({', '.join(graph.states) or 'state/ holds none yet'}), or n/a")
         for name in claims or []:
             if name not in graph.states:
-                out.append(f"{rel}: `state` names {name} but state/{name} does not exist")
+                out.append(f"{rel}: `state` names {name}, but state/{name} is not in this tree (a new state table is committed "
+                           f"together with its experiment: `commit -m … {fm.get('id', rel)} state/{name}`)")
         if isinstance(fm.get("affects", []), list):
             try:
                 for ref, _ in node.affects():
@@ -1596,7 +1614,7 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
             out.append(f"{rel}: parked needs a status_note saying what it waits for")
     elif kind == "inv":
         if len(str(fm.get("summary", ""))) > SUMMARY_MAX:
-            out.append(f"{rel}: summary longer than {SUMMARY_MAX} chars")
+            out.append(f"{rel}: summary is {len(str(fm['summary']))} chars, over {SUMMARY_MAX} — move detail into the body")
         if fm.get("area") not in graph.areas:
             out.append(f"{rel}: area `{fm.get('area')}` is not an area (areas/<area>/README.md)")
         if isinstance(fm.get("affects", []), list):
@@ -1619,10 +1637,20 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
     return out
 
 
+def first_difference(have: str, want: str) -> str:
+    """The first line where a file's head differs from the head fmt writes."""
+    a, b = have.splitlines(), want.splitlines()
+    for i, (x, y) in enumerate(zip(a, b), 1):
+        if x != y:
+            return f"line {i} is `{x[:80]}`, fmt writes `{y[:80]}`"
+    return f"line {min(len(a), len(b)) + 1} is where they part"
+
+
 def check_file(kind: str, node) -> list[str]:
     """What only the file on disk can violate: the canonical head."""
-    if not node.raw.startswith(canonical_head(kind, node.fm)):
-        return [f"{node.rel}: frontmatter/H1 is not canonical — run `python3 scripts/labledger.py fmt`"]
+    head = canonical_head(kind, node.fm)
+    if not node.raw.startswith(head):
+        return [f"{node.rel}: frontmatter/H1 is not canonical ({first_difference(node.raw, head)}) — run `python3 scripts/labledger.py fmt`"]
     return []
 
 
@@ -1660,8 +1688,9 @@ def validate_cross(graph: Graph, root: Path) -> list[str]:
                        f"`set {t.id} --status {t.fm['status']} --note ...` writes it")
     for kind, entries in (("dec", graph.decisions), ("issue", graph.issues)):
         for e in entries:
-            if not e.raw.startswith(emit_frontmatter(e.fm, ENTRY_KEY_ORDER[kind])):
-                out.append(f"{e.file}: frontmatter is not canonical — run `python3 scripts/labledger.py fmt`")
+            head = emit_frontmatter(e.fm, ENTRY_KEY_ORDER[kind])
+            if not e.raw.startswith(head):
+                out.append(f"{e.file}: frontmatter is not canonical ({first_difference(e.raw, head)}) — run `python3 scripts/labledger.py fmt`")
     for path in (root / "experiments").glob("EXP-*"):
         if path.is_file() and not EXP_FILE_RE.match(path.name):
             out.append(f"experiments/{path.name}: not an EXP-NNNN.md file — move attachments under experiments/attachments/")
@@ -1958,7 +1987,8 @@ def cmd_show(args) -> int:
     graph = load_graph(args.root)
     found = resolve_address(graph, args.id)
     if found is None:
-        print(f"unknown address {args.id} (ID · area · inv:<id> · dec:<date>-<slug> · issue:<slug>)", file=sys.stderr)
+        print(f"unknown address {args.id} (ID · area · inv:<id> · dec:<date>-<slug> · issue:<slug>){did_you_mean(graph, args.id)}",
+              file=sys.stderr)
         return 2
     kind, record = found
     SHOW[kind](graph, record)
@@ -2339,19 +2369,26 @@ def data_key(entry: str) -> str:
     return m.group(1).strip() if m else entry.strip()
 
 
+SET_INSTEAD = {  # what to use where an option does not apply, for the mix-ups agents make
+    ("note", "exp"): " — an experiment says what it found in --summary",
+    ("status", "issue"): " — an issue's status moves with `resolve issue <slug> --by …` or `promote issue <slug> --to <ID>`",
+}
+
+
 def cmd_set(args) -> int:
     root = args.root
     graph = load_graph(root)
     found = resolve_address(graph, args.id)
     if found is None or found[0] in ("area", "dec"):
-        print(f"set edits a TODO / EXP-NNNN / ARC-NNN / inv:<id> / issue:<slug>; `{args.id}` is " + ("not one" if found else "unknown"),
-              file=sys.stderr)
+        print(f"set edits a TODO / EXP-NNNN / ARC-NNN / inv:<id> / issue:<slug>; `{args.id}` is "
+              + ("not one" if found else f"unknown{did_you_mean(graph, args.id)}"), file=sys.stderr)
         return 2
     kind, node = found
     given = {opt: getattr(args, opt) for opt in SET_OPTIONS if getattr(args, opt) not in (None, [])}
     for opt in given:
         if kind not in SET_OPTIONS[opt]:
-            print(f"--{opt.replace('_', '-')} does not apply to {kind} {args.id} (only {', '.join(SET_OPTIONS[opt])})", file=sys.stderr)
+            print(f"--{opt.replace('_', '-')} does not apply to {kind} {args.id} (only {', '.join(SET_OPTIONS[opt])})"
+                  + SET_INSTEAD.get((opt, kind), ""), file=sys.stderr)
             return 2
     today = args.date or record_today(args.root)
     if not DATE_RE.match(today):
@@ -3240,7 +3277,7 @@ def commit_targets(root: Path, graph: Graph, targets: list[str]) -> list[str] | 
             continue
         found = resolve_address(graph, target)
         if found is None:
-            return f"unknown address or path `{target}`"
+            return f"unknown address or path `{target}`{did_you_mean(graph, target)}"
         kind, rec = found
         if kind in ("issue", "dec"):
             rels.append(rec.file)

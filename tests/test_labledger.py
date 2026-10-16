@@ -643,6 +643,30 @@ def test_write_commands_refuse_records_that_would_not_validate(repo: Path, capsy
                                    "host", "model", "commit"}
 
 
+def test_a_refusal_says_how_to_fix_it(repo: Path, capsys):
+    """Agents fix what a message tells them, so each says what to write instead: the length against its limit, where an
+    issue an experiment settled goes, what replaces an option the record does not take, what a misspelt address may
+    have meant, the unit a column lacks and the line of a head that fmt rewrites."""
+    for argv, hint in (
+        (("set", "EXP-0001", "--summary", "x" * (ll.SUMMARY_MAX + 7)), f"summary is {ll.SUMMARY_MAX + 7} chars, over {ll.SUMMARY_MAX}"),
+        (("set", "EXP-0001", "--affects", "issue:seed-issue-lab: settled"), "`resolve issue seed-issue-lab --by EXP-0001`"),
+        (("set", "EXP-0001", "--note", "x"), "says what it found in --summary"),
+        (("set", "issue:seed-issue-lab", "--status", "resolved"), "`resolve issue <slug> --by …`"),
+        (("show", "inv:review"), "did you mean inv:review-2026-09-03?"),
+        (("set", "LAB-01", "--note", "x"), "did you mean LAB-001"),
+    ):
+        assert run(repo, *argv) == 2, argv
+        assert hint in capsys.readouterr().err, argv
+    exp_table(repo, "model,latency\nresnet,12.5\n")
+    assert run(repo, "set", "EXP-0001", "--data", "runs.csv: one row per model") == 2
+    assert "like `latency[<unit>]`" in capsys.readouterr().err
+    todo = todo_path(repo)
+    todo.write_text(todo.read_text(encoding="utf-8").replace("priority: P1", "priority:  P1"), encoding="utf-8")
+    assert run(repo, "validate") == 1
+    assert "LAB-001.md: frontmatter/H1 is not canonical (line 7 is `priority:  P1`, fmt writes `priority: P1`)" in capsys.readouterr().out
+    assert run(repo, "fmt", "--check") == 1 and "LAB-001.md: line 7 is `priority:  P1`" in capsys.readouterr().out
+
+
 def test_check_node_is_the_rule_set_validate_uses(repo: Path):
     graph = ll.load_graph(repo)
     for kind in ll.NODE_TABLES:
