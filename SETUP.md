@@ -54,8 +54,8 @@ agent running it asks them, then runs it again with the answers.
 
 ## The tool
 
-`scripts/labledger.py` needs Python 3.9 or newer with its standard library alone, Linux or macOS (it locks files with
-`fcntl`), and git 2.28 or newer (tested with 2.34). After changing it, `python3 -m pytest tests` passes: each test
-builds a small ledger in a temporary folder and runs commands on it; in the tool's source repository one also validates
-`examples/demo` and one makes a ledger with `setup`. This ledger itself is checked by validate in CI and by the
-hooks. A new rule comes with its check and a test.
+`scripts/labledger.py --version` names the version of labledger the tool is. It needs Python 3.9 or newer with its
+standard library alone, Linux or macOS (it locks files with `fcntl`), and git 2.28 or newer (tested with 2.34). After
+changing it, `python3 -m pytest tests` passes: each test builds a small ledger in a temporary folder and runs commands
+on it; in the tool's source repository one also validates `examples/demo` and one makes a ledger with `setup`. This
+ledger itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.

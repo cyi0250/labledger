@@ -191,6 +191,7 @@ LABELS = {  # the words the write commands put into record bodies
     "in_progress": "(in progress)",  # a new EXP's summary
 }
 NAME = "labledger"  # what this ledger is called: its tool, settings, skill, commit messages, variables and refs carry it
+VERSION = "0.1.0"  # the version of labledger this tool is; a ledger's copy keeps the version it was taken at
 SETTINGS_FILE = "labledger.yml"  # the ledger's settings: `key: value` lines, every key optional
 SETTINGS_KEYS = ("timezone", "commit_prefix", "language")
 COMMIT_PREFIX = NAME  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
@@ -3806,6 +3807,8 @@ def main(argv: list[str]) -> int:
         return argparse.ArgumentParser(parents=[common], **kwargs)
 
     parser = command(prog="labledger.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION}",
+                        help="the version of labledger this tool was taken at")
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)
     p = sub.add_parser("validate", help="check every record and the rules between them"); p.set_defaults(func=cmd_validate)
     p.add_argument("--json", action="store_true", help="one JSON object: ok, problems, counts, stale views")
