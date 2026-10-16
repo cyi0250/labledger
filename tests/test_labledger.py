@@ -1595,13 +1595,20 @@ def test_ssh_targets_of_remote_urls():
         assert ll._ssh_target(url) is None, url
 
 
-FAKE_SSH = """#!/bin/sh
-stdio="$(readlink /proc/$$/fd/0) $(readlink /proc/$$/fd/1) $(readlink /proc/$$/fd/2)"
-echo "$*" >> "$SSH_LOG"
-case "$*" in
-  *"-O check"*) test -e "$SSH_MASTER" ;;
-  *" -N "*) echo "$stdio" > "$SSH_LOG.stdio"; test -z "$SSH_DOWN" || exit 255; : > "$SSH_MASTER" ;;
-esac
+FAKE_SSH = f"""#!{sys.executable}
+import os, sys
+args = " ".join(sys.argv[1:])
+with open(os.environ["SSH_LOG"], "a") as log:
+    log.write(args + "\\n")
+if "-O check" in args:
+    sys.exit(0 if os.path.exists(os.environ["SSH_MASTER"]) else 1)
+if " -N " in args:
+    null = os.stat(os.devnull)  # where stdin, stdout and stderr point, on Linux and macOS alike
+    with open(os.environ["SSH_LOG"] + ".stdio", "w") as f:
+        f.write(" ".join("/dev/null" if os.path.samestat(os.fstat(fd), null) else "elsewhere" for fd in (0, 1, 2)) + "\\n")
+    if os.environ.get("SSH_DOWN"):
+        sys.exit(255)
+    open(os.environ["SSH_MASTER"], "w").close()
 """
 
 

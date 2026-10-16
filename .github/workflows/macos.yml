@@ -1,0 +1,25 @@
+# The tool's tests on macOS, which the README names next to Linux. Only in the tool's source repository: a ledger
+# copies validate.yml and not this file, so a private ledger never spends macOS minutes on its records.
+name: macos
+on:
+  push:
+    branches: ["**"]
+    paths: ["scripts/**", "tests/**", ".github/workflows/macos.yml"]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --quiet pytest
+      - run: python -m pytest tests -q
