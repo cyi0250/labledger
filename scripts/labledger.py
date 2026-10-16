@@ -3552,6 +3552,8 @@ A body is edited in place, then committed with `commit -m "{prefix}(<scope>): <w
 ## Others write here too
 
 - A record's number comes from `new`, never from a file name of your own.
+- Exit code 3 means the record is written but not committed or not pushed: finish it with `commit` or `sync`, never by
+  running the command again, which would write a second record.
 - Other sessions write in the same folder at the same time. Commit through the tool only:
   `git add -A`, `git commit -a`, `git pull`, `git rebase`, `git stash`, `--no-verify` and `git push --force` take in
   or rewrite their work.
