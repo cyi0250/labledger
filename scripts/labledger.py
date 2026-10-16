@@ -2761,27 +2761,28 @@ def _push(root: Path, remote: str, merge: str, tracking: str) -> tuple[str, str 
         r = _run(root, "push", "--porcelain", remote, f"{tip}:{merge}", env=env, timeout=PUSH_TIMEOUT)
         if r.returncode == 0:
             return "ok", f"pushed {tip[:7]} to {remote}"
-        if "[rejected]" not in r.stdout:  # the pre-push check refused, or the remote could not be reached
-            lines = [l for l in (r.stderr or r.stdout).strip().splitlines() if l.strip()]
-            return "failed", ("not pushed — the commit stays local and the next commit pushes it:\n  "
+        if "[rejected]" not in r.stdout:  # the pre-push check refused, the remote refused, or it could not be reached
+            lines = [l for l in f"{r.stderr}\n{r.stdout}".splitlines() if l.strip()]  # git names a refusal's reason on stdout
+            return "failed", ("not pushed — the commit stays local; the next write, `commit` or `sync` pushes it:\n  "
                               + "\n  ".join(lines[-12:] or ["git push failed"]))
         _run(root, "fetch", "-q", remote, env=env, timeout=PUSH_TIMEOUT)  # a session sharing this clone may have pushed a descendant
     except subprocess.TimeoutExpired:
-        return "failed", f"not pushed — {remote} did not answer within {PUSH_TIMEOUT} s; the commit stays local and the next commit pushes it"
+        return "failed", (f"not pushed — {remote} did not answer within {PUSH_TIMEOUT} s; the commit stays local, and the next write, "
+                          "`commit` or `sync` pushes it")
     return ("ok", None) if upstream_has_tip() else ("rejected", None)
 
 
-def push_upstream(root: Path) -> str | None:
+def push_upstream(root: Path) -> tuple[bool, str | None]:
     """Push the current branch tip to the branch it tracks when that branch lacks it. When another server pushed
-    first, sync: bring its commits in, replay this clone's on top, push. Returns a one-line report (more when a sync
-    stops), or None when there is nothing to say (no upstream configured, or the upstream already has the tip)."""
+    first, sync: bring its commits in, replay this clone's on top, push. Returns whether the upstream has the tip now
+    (true too when there is no upstream) and a one-line report (more when a sync stops), or None for nothing to say."""
     up = _upstream(root)
     if up is None:
-        return None
+        return True, None
     state, report = _push(root, *up)
     if state != "rejected":
-        return report
-    return sync(root)[1]
+        return state == "ok", report
+    return sync(root)
 
 
 # ───────────────────────────── sync ─────────────────────────────
@@ -3132,8 +3133,8 @@ def reserve_number(root: Path, key: str, local_max: int, fmt: str) -> int | None
         if r.returncode == 0:
             _run(root, "update-ref", ID_REF, new)
             return n
-        if "rejected" not in r.stdout:  # refused for another reason than a race, or no answer
-            raise ReserveError(f"cannot push the number counter to {remote}: {(r.stderr or r.stdout).strip()[-300:]}")
+        if "[rejected]" not in r.stdout:  # not a race lost to another server's push: the remote refused it, or no answer
+            raise ReserveError(f"cannot push the number counter to {remote}: {f'{r.stderr} {r.stdout}'.strip()[-400:]}")
     raise ReserveError(f"the number counter on {remote} kept moving ({RESERVE_ATTEMPTS} attempts)")
 
 
@@ -3230,38 +3231,43 @@ def cmd_hook(args) -> int:
     return _hook_pre_push(args.root, sys.stdin.read().splitlines())
 
 
-def autocommit(args, rels: list[str], subject: str, body: str = "") -> None:
-    """After a write command wrote and rendered: commit what it wrote. A write that cannot be committed on its
-    own stays in the working tree with the reason printed — the write itself never fails here."""
+UNFINISHED = 3  # exit code: the record is written but not committed, or committed but not pushed — finish it, do not rerun
+
+
+def autocommit(args, rels: list[str], subject: str, body: str = "") -> bool:
+    """After a write command wrote and rendered: commit what it wrote, and push it. A write that cannot be committed
+    on its own stays in the working tree with the reason printed. Returns whether the write is finished: committed and
+    pushed, or not to be (--no-commit, --no-push, no git, no upstream)."""
     if getattr(args, "no_commit", False):
-        return
+        return True
     blocker = commit_blocker(args.root)
     if blocker == "not a git work tree":
-        return
+        return True
     if blocker:
-        print(f"not committed — {blocker}")
-        return
+        print(f"not committed — {blocker}", file=sys.stderr)
+        return False
     ensure_hooks(args.root)
     try:
         new = commit_paths(args.root, rels, subject + (f"\n\n{body}" if body else ""))
     except CommitError as exc:
-        print(f"not committed — {exc}\n  commit it with what it needs: python3 scripts/labledger.py commit -m \"…\" {' '.join(rels)} …")
-        return
+        print(f"not committed — {exc}\n  commit it with what it needs: python3 scripts/labledger.py commit -m \"…\" {' '.join(rels)} …",
+              file=sys.stderr)
+        return False
     print(f"committed {new[:7]} {subject}" if new else "nothing new to commit")
-    report = None if getattr(args, "no_push", False) else push_upstream(args.root)
+    pushed, report = (True, None) if getattr(args, "no_push", False) else push_upstream(args.root)
     if report:
-        print(report)
+        print(report, file=sys.stdout if pushed else sys.stderr)
+    return pushed
 
 
 def written(args, rels: list[str], subject: str, body: str = "") -> int:
     """How every write command ends: render, then commit what it wrote. A file the render cannot read (another
     session's unfinished note, say) stops the views but not the commit: the commit carries `rels` only and is
-    validated on its own tree. The record is written either way, so the command succeeds — a rerun would write a
-    second record."""
+    validated on its own tree. The record is written either way: a write left uncommitted or unpushed ends with
+    UNFINISHED, never the failure of a refusal, since a rerun would write a second record."""
     if run_render(args.root, check=False):
         print(f"{VIEWS}/ are not re-rendered until those are fixed; the record is written")
-    autocommit(args, rels, subject, body)
-    return 0
+    return 0 if autocommit(args, rels, subject, body) else UNFINISHED
 
 
 def commit_targets(root: Path, graph: Graph, targets: list[str]) -> list[str] | str:
@@ -3303,13 +3309,13 @@ def cmd_commit(args) -> int:
     try:
         new = commit_paths(root, rels, message)
     except CommitError as exc:
-        print(f"not committed — {exc}")
+        print(f"not committed — {exc}", file=sys.stderr)
         return 1
     print(f"committed {new[:7]} {message.splitlines()[0]}" if new else "nothing to commit — HEAD already has these paths")
-    report = None if args.no_push else push_upstream(root)
+    pushed, report = (True, None) if args.no_push else push_upstream(root)
     if report:
-        print(report)
-    return 0
+        print(report, file=sys.stdout if pushed else sys.stderr)
+    return 0 if pushed else UNFINISHED
 
 
 def cmd_sync(args) -> int:

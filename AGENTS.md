@@ -181,6 +181,15 @@ python3 scripts/labledger.py fmt                  # when validate says a head is
 
 The global options `--root`, `--no-commit`, `--no-push` and `--offline` go before or after the command.
 
+Every command ends with one of four exit codes, and says what went wrong on stderr:
+
+| Code | Meaning |
+|---|---|
+| 0 | done: written, committed and pushed, as far as the clone and the options allow |
+| 1 | a check found problems: validate, a refused `commit`, a stopped `sync`, a number not reserved, `find` with no match |
+| 2 | nothing was written: a usage error, a rule the record would break, an unknown address |
+| 3 | the record is written but not committed, or committed but not pushed: do not run the command again, which would write a second record; `commit` it, or let `sync` push it |
+
 1. **The agent empties the review queue**, recording each judgment as its group says ([Review queue](#review-queue)).
 2. **An experiment starts with `new exp`** and ends with `set EXP-NNNN --status final --summary … --data …`, adding
    `--affects` and `--state` when they apply. When a current value changed, its row in `state/` is edited in the same

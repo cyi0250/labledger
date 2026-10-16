@@ -274,7 +274,7 @@ def test_an_edited_investigation_or_issue_raises_its_updated(hooked: Path, capsy
     capsys.readouterr()
     assert run(hooked, "commit", "-m", "x", "inv:review-2026-09-03") == 1 and git(hooked, "rev-parse", "HEAD") == head
     assert ("changed, but `updated` is still 2026-09-03 — `python3 scripts/labledger.py set inv:review-2026-09-03`"
-            in capsys.readouterr().out)
+            in capsys.readouterr().err)
     assert run(hooked, "review") == 0 and "inv:review-2026-09-03" not in capsys.readouterr().out
     assert run(hooked, "set", "inv:review-2026-09-03") == 0 and f"updated: {TODAY}" in inv.read_text(encoding="utf-8")
     assert git(hooked, "status", "--porcelain") == ""
@@ -515,7 +515,7 @@ def test_set_commits_an_experiment_with_its_tables_and_the_commit_reads_them(gre
     table.write_text("model,latency\nresnet,12.5\n", encoding="utf-8")
     head = git(grepo, "rev-parse", "HEAD")
     assert run(grepo, "commit", "-m", "x", "EXP-0001") == 1
-    assert "column `latency` holds numbers" in capsys.readouterr().out and git(grepo, "rev-parse", "HEAD") == head
+    assert "column `latency` holds numbers" in capsys.readouterr().err and git(grepo, "rev-parse", "HEAD") == head
 
 
 def test_record_links_point_at_files_of_the_ledger(repo: Path, capsys):
@@ -977,10 +977,10 @@ def test_commit_refuses_a_record_whose_links_stay_behind(grepo: Path, capsys):
     assert run(grepo, "--no-commit", "new", "exp", "x", "--affects", "LAB-002: progress") == 0
     head = git(grepo, "rev-parse", "HEAD")
     assert run(grepo, "commit", "-m", "x", "EXP-0002") == 1
-    assert "affects unknown LAB-002" in capsys.readouterr().out
+    assert "affects unknown LAB-002" in capsys.readouterr().err
     assert git(grepo, "rev-parse", "HEAD") == head, "a refused commit moves nothing"
-    assert run(grepo, "set", "EXP-0002", "--summary", "short summary") == 0
-    assert "not committed" in capsys.readouterr().out and git(grepo, "rev-parse", "HEAD") == head, "nor does a refused auto-commit"
+    assert run(grepo, "set", "EXP-0002", "--summary", "short summary") == ll.UNFINISHED, "written, not committed: not to be run again"
+    assert "not committed" in capsys.readouterr().err and git(grepo, "rev-parse", "HEAD") == head, "nor does a refused auto-commit"
     assert run(grepo, "commit", "-m", "x", "EXP-0002", "LAB-002") == 0
     assert git(grepo, "status", "--porcelain") == ""
     assert run(grepo, "commit", "-m", "x", "NOPE-404") == 2
@@ -1099,8 +1099,8 @@ def test_the_pre_push_hook_refuses_a_tip_that_does_not_validate(hooked: Path, or
     r = subprocess.run(["git", "-C", str(hooked), "push", "origin", "main"], capture_output=True, text=True)
     assert r.returncode != 0 and "would not validate" in r.stderr and "NOPE-001" in r.stderr
     assert git(origin, "rev-parse", "main") != git(hooked, "rev-parse", "HEAD")
-    report = ll.push_upstream(hooked)
-    assert report.startswith("not pushed") and "NOPE-001" in report and "lacks" not in report
+    pushed, report = ll.push_upstream(hooked)
+    assert not pushed and report.startswith("not pushed") and "NOPE-001" in report and "lacks" not in report
 
 
 def test_the_pre_push_hook_runs_the_tool_tests_when_the_tool_changed(hooked: Path, origin: Path):
@@ -1136,9 +1136,9 @@ def test_a_push_that_another_servers_push_will_refuse_skips_the_hook(hooked: Pat
 
 def test_an_unreachable_remote_is_not_reported_as_another_servers_push(grepo: Path, origin: Path, tmp_path: Path, capsys):
     git(grepo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
-    assert run(grepo, "--offline", "new", "exp", "x") == 0
-    out = capsys.readouterr().out
-    assert "committed" in out and "not pushed" in out and "lacks" not in out
+    assert run(grepo, "--offline", "new", "exp", "x") == ll.UNFINISHED, "committed, not pushed"
+    out, err = capsys.readouterr()
+    assert "committed" in out and "not pushed" in err and "lacks" not in err
 
 
 def server(origin: Path, path: Path) -> Path:
@@ -1183,10 +1183,10 @@ def test_sync_stops_where_both_sides_changed_the_same_lines_and_resumes_after_th
     other = server(origin, tmp_path / "server-b")
     config = (grepo / ".git" / "config").read_bytes()
     exp = "experiments/EXP-0001.md"
-    for root, line in ((other, "B's result\n"), (grepo, "A's result\n")):  # B pushes first; A's push is refused and syncs
+    for root, line, rc in ((other, "B's result\n", 0), (grepo, "A's result\n", ll.UNFINISHED)):  # B pushes first; A's push syncs and stops
         (root / exp).write_text((root / exp).read_text(encoding="utf-8") + line, encoding="utf-8")
-        assert run(root, "commit", "-m", f"ledger(exp): {line.strip()}", "EXP-0001") == 0
-    out = capsys.readouterr().out
+        assert run(root, "commit", "-m", f"ledger(exp): {line.strip()}", "EXP-0001") == rc
+    out = capsys.readouterr().err
     wt = grepo / ".git" / "labledger-sync"
     assert "changed the same lines" in out and f"  - {exp}\n" in out and str(wt) in out
     local = git(grepo, "rev-parse", "HEAD")
@@ -1233,8 +1233,8 @@ def test_sync_keeps_uncommitted_work_and_stops_where_it_would_overwrite_it(grepo
 def test_a_replayed_commit_that_does_not_validate_stops_the_sync_until_fixed(grepo: Path, origin: Path, tmp_path: Path, capsys):
     other = server(origin, tmp_path / "server-b")
     assert run(other, "new", "decision", "same-slug", "--text", "B's global decision") == 0
-    assert run(grepo, "new", "decision", "same-slug", "--area", "lab", "--text", "A's area decision") == 0
-    out = capsys.readouterr().out
+    assert run(grepo, "new", "decision", "same-slug", "--area", "lab", "--text", "A's area decision") == ll.UNFINISHED
+    out = capsys.readouterr().err
     assert "does not validate" in out and "is defined in both" in out, "the texts merge; the two addresses collide"
     wt = grepo / ".git" / "labledger-sync"
     dec = wt / "areas" / "lab" / "decisions" / f"{TODAY}-same-slug.md"
@@ -1278,10 +1278,10 @@ def test_sync_runs_under_the_hooks(hooked: Path, origin: Path, tmp_path: Path, c
     """The clone's hooks also run in the private worktree (finishing a merged pick commits there)."""
     other = server(origin, tmp_path / "server-b")
     exp = "experiments/EXP-0001.md"
-    for root, line in ((other, "B's result\n"), (hooked, "A's result\n")):
+    for root, line, rc in ((other, "B's result\n", 0), (hooked, "A's result\n", ll.UNFINISHED)):
         (root / exp).write_text((root / exp).read_text(encoding="utf-8") + line, encoding="utf-8")
-        assert run(root, "commit", "-m", f"ledger(exp): {line.strip()}", "EXP-0001") == 0
-    assert "changed the same lines" in capsys.readouterr().out
+        assert run(root, "commit", "-m", f"ledger(exp): {line.strip()}", "EXP-0001") == rc
+    assert "changed the same lines" in capsys.readouterr().err
     wt = hooked / ".git" / "labledger-sync"
     merged = (hooked / exp).read_text(encoding="utf-8").removesuffix("A's result\n") + "B's result\nA's result\n"
     (wt / exp).write_text(merged, encoding="utf-8")
@@ -1324,6 +1324,17 @@ def test_a_reservation_that_loses_the_race_reads_the_counter_again(grepo: Path, 
     assert run(grepo, "--no-commit", "new", "exp", "A") == 0
     assert (other / "experiments" / "EXP-0002.md").is_file() and (grepo / "experiments" / "EXP-0003.md").is_file()
     assert not (grepo / "experiments" / "EXP-0002.md").exists()
+
+
+def test_a_remote_that_refuses_the_counter_is_not_taken_for_a_race(grepo: Path, origin: Path, capsys):
+    """A remote that refuses the counter's push (a hook, permissions) says why at once, instead of being retried as a
+    race lost to another server and reported as a counter that kept moving."""
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\necho 'counter pushes are not allowed here' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    assert run(grepo, "new", "exp", "x") == 1
+    err = capsys.readouterr().err
+    assert "counter pushes are not allowed here" in err and "kept moving" not in err
 
 
 def test_no_number_without_the_upstream_unless_offline(grepo: Path, origin: Path, tmp_path: Path, capsys):
@@ -1460,8 +1471,8 @@ def test_a_partial_clone_leaves_the_attachments_upstream_until_asked(hooked: Pat
     (b_att / "EXP-0001").mkdir()
     (b_att / "EXP-0001" / "note.txt").write_text("B's note\n", encoding="utf-8")
     assert run(b, "commit", "-m", "x", "EXP-0001") == 1, "its other files are not here: the commit would delete them"
-    assert "`python3 scripts/labledger.py attachments EXP-0001` brings them in" in capsys.readouterr().out
-    assert run(b, "commit", "-m", "x", "experiments") == 1 and "leaves off disk" in capsys.readouterr().out
+    assert "`python3 scripts/labledger.py attachments EXP-0001` brings them in" in capsys.readouterr().err
+    assert run(b, "commit", "-m", "x", "experiments") == 1 and "leaves off disk" in capsys.readouterr().err
     assert run(b, "attachments", "EXP-0001") == 0
     assert "experiments/attachments/EXP-0001/: 4 file(s)" in capsys.readouterr().out
     assert (b_att / "EXP-0001" / "big.bin").read_bytes() == big("a") and (b_att / "EXP-0001" / "small.txt").read_text(encoding="utf-8") == "changed\n"
@@ -1488,7 +1499,7 @@ def test_a_sparse_checkout_the_tool_does_not_know_is_refused(grepo: Path, origin
     assert run(b, "new", "exp", "x") == 2 and "sparse checkout is not the one labledger.py knows" in capsys.readouterr().err
     assert not (b / "experiments" / "EXP-0002.md").exists()
     assert run(b, "sync") == 1 and "not synced — this clone's sparse checkout" in capsys.readouterr().out
-    assert run(b, "commit", "-m", "x", "EXP-0001") == 1 and "not the one labledger.py knows" in capsys.readouterr().out
+    assert run(b, "commit", "-m", "x", "EXP-0001") == 1 and "not the one labledger.py knows" in capsys.readouterr().err
     assert run(b, "attachments", "EXP-0001") == 2
 
 
