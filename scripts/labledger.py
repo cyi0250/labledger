@@ -12,11 +12,12 @@ Every record is a Markdown file whose frontmatter is the source of truth:
   state/*.md, state/*.csv                                the current best-known values, each citing its EXP
 Tables and lists are generated into views/ on each clone (never committed): `render` rebuilds them.
 
-AGENTS.md is the rulebook, with MACHINES.md and SETUP.md for the cases only some sessions meet; `validate` checks
-every rule they state. Write commands (new, set, resolve, promote) edit frontmatter only, refuse a record that would
-not validate, then commit what they wrote and push it when the branch tracks an upstream. Bodies are edited by hand
-and committed with `commit`. labledger.yml sets the ledger's time zone and commit message prefix; templates/
-replaces the body skeletons and the words commands write into records.
+AGENTS.md is the rulebook, with MACHINES.md and SETUP.md for the cases only some sessions meet; the tool checks every
+rule they state, and `validate --help` lists what validate checks. Write commands (new, set, resolve, promote) write
+heads, a new record's skeleton, decisions and the lines an issue gets; they refuse a head that would not validate,
+then commit what they wrote and push it when the branch tracks an upstream. Bodies are edited by hand and committed
+with `commit`. labledger.yml sets the ledger's time zone, commit message prefix and language; templates/ replaces the
+body skeletons and the words commands write into records.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
@@ -1745,6 +1747,88 @@ def tree_problems(root: Path, committed: bool = False, tracked: set[str] | None 
         problems.append(f"{VIEWS}/ is committed — each clone renders it and it stays out of git (`git rm -r --cached {VIEWS}`)")
     return graph, problems
 
+
+def validate_help() -> str:
+    """What `validate --help` says: every check validate makes, with the keys, words and limits of the code that checks."""
+    def keys(order, required) -> str:
+        return " ".join(k if k in required else f"[{k}]" for k in order)
+
+    def fill(text: str, indent: str = "", hang: str = "") -> str:
+        return textwrap.fill(text, 116, initial_indent=indent, subsequent_indent=hang, break_on_hyphens=False,
+                             break_long_words=False)
+
+    heads = [(kind, keys(KEY_ORDER[kind], REQUIRED[kind])) for kind in NODE_TABLES]
+    heads += [(name, keys(ENTRY_KEY_ORDER[kind], ENTRY_REQUIRED[kind])) for kind, name in (("dec", "decision"), ("issue", "issue"))]
+    lists = "; ".join(f"{kind} {' '.join(LIST_FIELDS[kind])}" for kind in NODE_TABLES if LIST_FIELDS[kind])
+    statuses = "; ".join(f"{kind} {' '.join(STATUS_VOCAB[kind])}" for kind in STATUS_VOCAB)
+    paragraphs = [
+        "validate checks every record, the folders records live in and the rules between records, and names each problem "
+        "with what to change. A write command checks the head it is about to write (its keys, values and statuses, the "
+        "records it names, an experiment's data tables and the state tables it names) and writes nothing that breaks those "
+        "rules; the rest (a state table's rows and citations, a close decision, the other links in bodies, the settings) "
+        "is checked by validate and when a commit is made (commit --help).",
+        "\n".join([fill("Heads. A head starts at line 1 with `---` and gives each key of its kind once, in this order, with "
+                        "every key outside [brackets] present and every such single value filled:"),
+                   *(fill(f"{name:<9}{order}", "  ", " " * 11) for name, order in heads),
+                   fill(f"Lists ({lists}) are written [a, b] on one line or as `- item` lines; a single value that starts "
+                        "with [ or holds a comma is quoted. The head is exactly what `fmt` writes, and for todo, exp, arc and "
+                        "area the line `# ID — title` follows it. `type` names the kind, `id` matches the file name (an "
+                        "area's, its folder) and `area` the folder.")]),
+        f"Values. Statuses: {statuses}; issue {' '.join(ISSUE_STATUSES)}. priority {' '.join(PRIORITIES)}. Dates are "
+        f"YYYY-MM-DD, and `updated` is never before `created`, or before `date` for an inv or an issue. summary holds at "
+        f"most {SUMMARY_MAX} characters, status_note at most {STATUS_NOTE_MAX}. host is a host name; an area's prefix is "
+        "capital letters and dashes, its order a whole number.",
+        "Names and folders. Every TODO ID, inv name, dec: and issue: address is used once. A decision's file name is its "
+        "date and its title with dashes for spaces; issue slugs, and decision titles apart from their spaces, start with a "
+        "letter or a digit and use only `A-Za-z0-9._-`. Every folder in areas/ has a README.md with an area head, and "
+        "every other .md file directly in it is a TODO (<PREFIX>-NNN.md) or an inv. Every .md file in arcs/ is an "
+        "ARC-NNN.md record or its README; a file in "
+        f"experiments/ whose name starts with EXP- is an EXP-NNNN.md record (attachments go in {ATTACHMENTS}). A "
+        "decisions/ or issues/ folder holds one .md file per record.",
+        "Links. Every record a head names exists. A TODO's `from` takes TODO and EXP IDs, issue: inv: dec: arc: addresses "
+        "and `user`; `resolves` the same but `user`; depends_on, supersedes and evidence take TODO and EXP IDs. An arc is "
+        "written arc:ARC-NNN in these. An EXP's affects lists \"ID: note\" entries for TODOs and EXPs, an inv's for TODOs "
+        "and issue:<slug>s. An EXP's arc names an arc; an arc's members name TODOs, its exps EXPs, its areas areas. A "
+        "relative link in a body or in a Markdown state table points at a file or folder of the ledger: not an absolute "
+        f"path, not outside the ledger, not into {VIEWS}/. Links in code, URLs and #anchors are not checked.",
+        "Statuses. A dropped TODO and a parked arc have a status_note. A TODO that supersedes another needs the other "
+        "closed. A superseded experiment names its superseded_by. A done or dropped TODO has a close decision, "
+        "areas/<area>/decisions/<date>-close-<ID>.md, which `set` writes.",
+        f"Data. An experiment's `data`, which a final experiment has, lists \"<file>: <what one row is>\" entries for "
+        f"{'/'.join(e[1:].upper() for e in DATA_EXTENSIONS)} files in {ATTACHMENTS}EXP-NNNN/, each linked from its body, "
+        "or holds the single entry \"n/a (why)\". Each file is UTF-8 text. A CSV or TSV has a header row, each column "
+        "named once and not by a number, every row as wide as the header. No cell holds a list of numbers (1,2,3 · 1;2;3 · [1, 2, 3] · "
+        "(0, 0, 0)), a number with thousands separators (1,786,215) or a fraction of whole numbers (0/3024). A column "
+        "that holds only numbers ends its name with their unit in brackets: latency[ms]; [1] for a count or a ratio; [id] "
+        "for numbers that name things. A JSON file has to parse. A table is read where it is on disk; where it is "
+        "not (a partial clone, CI), git must have it.",
+        f"State. A state table, state/<name>.csv, has the columns {', '.join(STATE_COLUMNS)} (optional: "
+        f"{', '.join(STATE_OPTIONAL)}; every other column is a condition the value holds under). item, value and commit "
+        f"are filled, kind is {' or '.join(STATE_KINDS)}, measured_at is YYYY-MM-DD, exp is a final experiment whose "
+        "`state` names the table, a source exists, and every row is as wide as the header. An item appears once per set "
+        "of conditions across state/. An experiment's `state` names the tables it is the source of, each existing and "
+        "citing it, or says n/a. Every state table, CSV or Markdown, names only experiments that exist, each written in "
+        "full (EXP-0007 / EXP-0008, not EXP-0007/0008); a Markdown state table is otherwise free text.",
+        f"Settings and templates. {SETTINGS_FILE} holds only {' '.join(SETTINGS_KEYS)}: an IANA time zone, and a "
+        f"commit_prefix of one word of `A-Za-z0-9._-`. {TEMPLATES_DIR}/ holds only "
+        f"{' '.join(f'{kind}.md' for kind in SKELETONS)} and labels.yml, which holds only the labels SETUP.md names, its "
+        "closed_by holding {evidence}.",
+    ]
+    return "\n\n".join(p if "\n" in p else fill(p) for p in paragraphs)
+
+
+COMMIT_HELP = """\
+commit commits the paths it is given and nothing else: every other uncommitted change stays as it was, and an EXP
+brings its attachment folder. It refuses a clone that cannot take a commit (not a git work tree or not its top, a
+detached HEAD, a merge, cherry-pick, revert or rebase in progress), an unknown address, a path outside the ledger,
+and in a partial clone a sparse checkout of another form or a path that reaches attachments left off disk
+(MACHINES.md). The commit is checked on its own tree as validate checks a ledger (validate --help), views/ refused,
+and for two things only a commit shows: an investigation or issue it changes carries a new `updated`, today's or
+another than its last commit had (`set inv:<name>` or `set issue:<slug>` raises it to today); and where the clone
+has an upstream and a copy of the counter, which its first `new` fetches, a TODO, experiment or arc it adds has a
+number no higher than that copy (MACHINES.md, Numbers). The pre-commit hook makes the same checks on a hand `git
+commit`. The commit is then pushed; a push that fails leaves it local for the next write, `commit` or `sync` to
+push, and ends with exit code 3."""
 
 EXIT_CODES = """\
 exit codes:
@@ -4026,7 +4110,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION} ({SOURCE_URL})",
                         help=f"the version of {SOURCE_NAME} this tool was taken from, and where its source is")
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)
-    p = sub.add_parser("validate", help="check every record and the rules between them"); p.set_defaults(func=cmd_validate)
+    p = sub.add_parser("validate", help="check every record and the rules between them", description=validate_help(),
+                       formatter_class=argparse.RawDescriptionHelpFormatter); p.set_defaults(func=cmd_validate)
     p.add_argument("--json", action="store_true", help="one JSON object: ok, problems, counts, stale views")
     p.add_argument("--committed", action="store_true",
                    help="the tree is a commit's checkout (hooks, CI): views/ must be absent, and stale views are not reported")
@@ -4108,7 +4193,7 @@ def main(argv: list[str]) -> int:
                 "experiment's commit takes its attachment folder and the state tables --state names")
     p = sub.add_parser("set", help=set_help, description=set_help)
     p.set_defaults(func=cmd_set)
-    p.add_argument("id", help="TODO ID | EXP-NNNN | ARC-NNN | inv:<id> | issue:<slug> (an issue takes no option: its `updated` is raised)")
+    p.add_argument("id", help="TODO ID | EXP-NNNN | ARC-NNN | inv:<id> | issue:<slug> (an issue takes no option but --date: its `updated` is raised)")
     p.add_argument("--status"); p.add_argument("--note", help="the status note (todo, arc, inv)")
     p.add_argument("--priority", choices=PRIORITIES)
     p.add_argument("--evidence", nargs="*", help="todo: the EXP IDs it was settled by (added to the list)")
@@ -4117,12 +4202,14 @@ def main(argv: list[str]) -> int:
     p.add_argument("--state", help="exp: every state/ file it is the source of, or n/a (replaces the value; the files go in "
                    "its commit)")
     p.add_argument("--data", nargs="*", help='exp: "<file>: <what one row is>" for each table in experiments/attachments/EXP-NNNN/ '
-                   '(an entry for the same file is replaced), or "n/a (why)"')
+                   '(an entry for the same file is replaced), or "n/a (why)", which replaces every entry (a file entry later replaces '
+                   'the n/a)')
     p.add_argument("--superseded-by", dest="superseded_by", help="exp: with status superseded")
     p.add_argument("--host", help="exp: the machine its local paths are on")
     p.add_argument("--model", help="exp"); p.add_argument("--commit", help="exp")
     p.add_argument("--date", help="the date of `updated` and of a close decision (default: today; for records made late)")
-    p = sub.add_parser("commit", help="commit these records and files only (other uncommitted work stays as it is)")
+    p = sub.add_parser("commit", help="commit these records and files only (other uncommitted work stays as it is)",
+                       description=COMMIT_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.set_defaults(func=cmd_commit)
     p.add_argument("targets", nargs="+", help="ID | EXP-NNNN (with its attachments) | ARC-NNN | inv:<id> | issue:<slug> | dec:<id> | area | path")
     msg = p.add_mutually_exclusive_group(required=True)

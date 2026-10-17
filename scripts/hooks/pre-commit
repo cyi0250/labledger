@@ -1,3 +1,3 @@
 #!/bin/sh
-# labledger: refuse a hand `git commit` whose tree would not validate (AGENTS.md, Commits).
+# labledger: refuse a hand `git commit` whose tree would not validate (SETUP.md, The tool).
 exec python3 "$(dirname "$0")/../labledger.py" --root "$(git rev-parse --show-toplevel)" hook pre-commit

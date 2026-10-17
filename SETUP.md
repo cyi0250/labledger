@@ -1,7 +1,7 @@
 # Setup, settings and the tool
 
 [AGENTS.md](AGENTS.md) holds the rules every session uses. This file holds what a session meets only when it sets up the
-ledger or its skill, changes the ledger's settings or templates, or changes the tool.
+ledger or its skill, brings in tables made before it, changes the ledger's settings or templates, or changes the tool.
 
 ## Setup and the skill
 
@@ -36,6 +36,9 @@ agent running it asks them, then runs it again with the answers.
   skill of that name that is not this ledger's.
 - **A ledger without a remote** is kept on one machine: its write commands commit without pushing, its numbers are the
   local maximum + 1, and `sync` has nothing to do.
+- *Guidance:* to give a table made before the ledger its units, append them to the original column names (`cycles` →
+  `cycles[cycles]`). `sed '1s/\[[^]]*\]//g' <file>` then gives back the original file byte for byte, for the scripts
+  and checksum lists that expect it.
 
 ## Settings and templates
 
@@ -81,3 +84,11 @@ with its standard library alone, Linux or macOS (it locks files with `fcntl`), a
 2.34). After changing it, `python3 -m pytest tests` passes: each test builds a small ledger in a temporary folder and
 runs commands on it; in the tool's source repository one also validates `examples/demo` and one makes a ledger with
 `setup`. This ledger itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.
+*Guidance:* it also gets a line in `validate --help` (or in `commit --help`, for a rule only a commit shows), which
+nothing checks.
+
+The tool's first commit in a clone sets `core.hooksPath` to `scripts/hooks`, unless git already has a `core.hooksPath`
+in any of its config files: then wire the two hooks into that setup by hand. While it is set, git does not run the
+scripts in `.git/hooks`. pre-commit checks a hand `git commit` as `commit` does; pre-push validates each tip it pushes
+and, when `scripts/` or `tests/` changed or the branch is new, runs the tests if pytest is installed. CI
+(`.github/workflows/validate.yml`) validates and runs the tests on every push.

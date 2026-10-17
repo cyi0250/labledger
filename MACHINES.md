@@ -11,8 +11,8 @@ of it; a new machine clones the ledger and puts its skill on with `setup` ([SETU
   reserve its number only when it passes, so a refused record takes none. When that remote cannot be reached, nothing is
   made; `--offline` takes the local maximum + 1 instead and notes it in the clone's copy of the counter. A branch
   without an upstream takes the local maximum + 1. A commit that adds a TODO, an experiment or an arc under a number
-  past the clone's copy of the counter, which no `new` reserved, is refused. *Guidance:* gaps are fine and no number is
-  reused.
+  past the clone's copy of the counter, which no `new` reserved, is refused; a clone has that copy from its first
+  `new` on. *Guidance:* gaps are fine and no number is reused.
 - **Two records under one number** come only from `--offline` (another machine took the same number meanwhile), and
   they are repaired by hand. sync stops on the record's file, and only one record keeps the number. Inside
   `.git/labledger-sync/`, put the other machine's file back (`git show <remote>/<branch>:<path> > <path>`; this
