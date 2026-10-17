@@ -993,6 +993,22 @@ def test_commit_carries_only_the_named_records(grepo: Path, tmp_path: Path, caps
     assert "nothing to commit" in capsys.readouterr().out
 
 
+def test_set_state_commits_the_tables_it_names(grepo: Path, capsys):
+    """A state row edited by hand goes into the commit of the experiment that names its table, which then validates on
+    its own: `set EXP-NNNN --state` commits the tables it names with the experiment, as it does the attachment folder."""
+    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)") == 0
+    head = git(grepo, "rev-parse", "HEAD")
+    assert run(grepo, "set", "EXP-0001", "--state", "latency.csv") == 2, "a table that is not there yet"
+    assert "write the table with its row first" in capsys.readouterr().err and git(grepo, "rev-parse", "HEAD") == head
+    (grepo / "state").mkdir()
+    (grepo / "state" / "latency.csv").write_text("item,value,unit,kind,exp,commit,measured_at\n"
+                                                  "latency,12.5,ms,measured,EXP-0001,abc1234,2026-09-05\n", encoding="utf-8")
+    (grepo / "state" / "other.csv").write_text("item,value,unit,kind,exp,commit,measured_at\n", encoding="utf-8")
+    assert run(grepo, "set", "EXP-0001", "--state", "latency.csv") == 0
+    assert set(git(grepo, "show", "--name-only", "--format=", "HEAD").split()) == {"experiments/EXP-0001.md", "state/latency.csv"}
+    assert git(grepo, "status", "--porcelain") == "?? state/other.csv\n", "a table it does not name stays out"
+
+
 def test_commit_refuses_a_record_whose_links_stay_behind(grepo: Path, capsys):
     assert run(grepo, "--no-commit", "new", "todo", "lab", "second") == 0
     assert run(grepo, "--no-commit", "new", "exp", "x", "--affects", "LAB-002: progress") == 0

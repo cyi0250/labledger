@@ -1588,8 +1588,9 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
                        f"({', '.join(graph.states) or 'state/ holds none yet'}), or n/a")
         for name in claims or []:
             if name not in graph.states:
-                out.append(f"{rel}: `state` names {name}, but state/{name} is not in this tree (a new state table is committed "
-                           f"together with its experiment: `commit -m … {fm.get('id', rel)} state/{name}`)")
+                out.append(f"{rel}: `state` names {name}, but state/{name} is not in this tree — write the table with its row "
+                           f"first: `set {fm.get('id', rel)} --state …` commits it with the experiment, as does "
+                           f"`commit -m … {fm.get('id', rel)} state/{name}`")
         if isinstance(fm.get("affects", []), list):
             try:
                 for ref, _ in node.affects():
@@ -2562,6 +2563,8 @@ def cmd_set(args) -> int:
     rels = [node.rel] + ([close_block[0]] if close_block else [])
     if kind == "exp" and (root / ATTACHMENTS / node.id).is_dir():  # the data files its `data` names go in with it
         rels.append(f"{ATTACHMENTS}{node.id}")
+    if "state" in given:  # and the state tables it names, whose rows cite it: one commit that validates on its own
+        rels += [f"state/{name}" for name in state_claims(fm["state"]) or [] if (root / "state" / name).is_file()]
     scope = {"exp": "exp", "arc": "arc"}.get(kind) or node.fm.get("area") or kind
     fields = [c.split(" ")[0].replace("status_note", "note") for c in changes if not c.startswith(("updated", "close decision"))]
     what = given["status"] if "status" in given and "status" in fields else " ".join(f for f in fields if f != "status") or "touched"
@@ -4101,7 +4104,9 @@ def main(argv: list[str]) -> int:
     pr = pk.add_parser("issue"); pr.set_defaults(func=cmd_promote_issue); pr.add_argument("slug")
     pr.add_argument("--to", required=True, help="the TODO it became (make it first: `new todo … --from issue:<slug>`)")
     pr.add_argument("--note")
-    p = sub.add_parser("set", help="change a record's frontmatter; a TODO's, arc's, investigation's or issue's `updated` becomes today")
+    set_help = ("change a record's frontmatter; a TODO's, arc's, investigation's or issue's `updated` becomes today; an "
+                "experiment's commit takes its attachment folder and the state tables --state names")
+    p = sub.add_parser("set", help=set_help, description=set_help)
     p.set_defaults(func=cmd_set)
     p.add_argument("id", help="TODO ID | EXP-NNNN | ARC-NNN | inv:<id> | issue:<slug> (an issue takes no option: its `updated` is raised)")
     p.add_argument("--status"); p.add_argument("--note", help="the status note (todo, arc, inv)")
@@ -4109,7 +4114,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--evidence", nargs="*", help="todo: the EXP IDs it was settled by (added to the list)")
     p.add_argument("--affects", nargs="*", help='exp, inv: "ID: note" (an entry for the same ID is replaced)')
     p.add_argument("--summary", help="exp, inv")
-    p.add_argument("--state", help="exp: the state/ files it is the source of, or n/a")
+    p.add_argument("--state", help="exp: every state/ file it is the source of, or n/a (replaces the value; the files go in "
+                   "its commit)")
     p.add_argument("--data", nargs="*", help='exp: "<file>: <what one row is>" for each table in experiments/attachments/EXP-NNNN/ '
                    '(an entry for the same file is replaced), or "n/a (why)"')
     p.add_argument("--superseded-by", dest="superseded_by", help="exp: with status superseded")

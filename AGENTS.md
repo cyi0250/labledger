@@ -149,7 +149,7 @@ instead). Links inside code, URLs and `#anchors` are not checked.
 - An experiment's `state` names the state tables it is the source of now, or says `n/a`; `n/a (row taken over by
   EXP-NNNN)` once a later experiment replaced its row. Each table it names exists and cites it (a write command
   only warns about a missing citation; validate refuses it). `set EXP-NNNN --state "a.csv b.csv"` replaces the whole
-  value, so it names every table at once.
+  value, so it names every table at once, and commits those tables with the experiment.
 - A Markdown state table is free text. validate checks its links and its citations: every EXP a state table names
   exists and is written in full (`EXP-0007 / EXP-0008`, never `EXP-0007/0008`).
 - *Guidance:* write a current value once, in `state/`, and cite it elsewhere by its EXP. validate cannot see a copy
@@ -171,8 +171,7 @@ python3 scripts/labledger.py set inv:dma-path-audit-2026-03-02 --status conclude
 python3 scripts/labledger.py new todo sim "Fix the DMA stall" --from issue:dma-stalls inv:dma-path-audit-2026-03-02   # say it is SIM-013
 python3 scripts/labledger.py promote issue dma-stalls --to SIM-013
 python3 scripts/labledger.py new exp "DMA latency under load" --model "sim v2" --commit 347d29d --affects "SIM-013: first numbers"
-python3 scripts/labledger.py set EXP-0042 --status final --summary "…" --data "latency.csv: one row per load level" --state latency.csv --no-commit
-python3 scripts/labledger.py commit -m "ledger(exp): EXP-0042 results" EXP-0042 state/latency.csv   # with the row edited by hand
+python3 scripts/labledger.py set EXP-0042 --status final --summary "…" --data "latency.csv: one row per load level" --state latency.csv
 python3 scripts/labledger.py set SIM-013 --status done --evidence EXP-0042 --note "no stall at any load"
 python3 scripts/labledger.py resolve issue dma-stalls --by EXP-0042
 python3 scripts/labledger.py set SIM-007 --note "still waits for the new board"   # judged unchanged: raises `updated`
@@ -245,10 +244,10 @@ TODO) takes it off groups 1, 2 and 6; the other groups clear when the status the
 Checked when a commit is made, by every write command, by `commit`, and by the pre-commit hook for a hand `git commit`:
 
 - **A commit validates on its own**: the tree it makes passes validate, whatever else is uncommitted. A write command
-  commits what it wrote: the record, a TODO's close decision, and with `set` on an experiment its attachment folder.
-  When that commit would not validate on its own (an experiment's `state` names a state table not committed yet),
-  nothing is committed: the command says why, and the record stays in the working tree. Commit it together with what
-  it needs: `commit -m "…" EXP-0042 state/latency.csv`.
+  commits what it wrote: the record, a TODO's close decision, and with `set` on an experiment its attachment folder
+  and the state tables its `--state` names. When that commit would not validate on its own, nothing is committed: the
+  command says why, and the record stays in the working tree. Commit it together with what it needs:
+  `commit -m "…" EXP-0042 state/latency.csv`.
 - **An edited investigation or issue raises its `updated`.** review dates what one says by its `updated`. A commit
   that changes one but leaves its `updated` as it was, on a day before today, is refused; `set inv:<name>` or `set
   issue:<slug>` raises it. This compares the commit with its parent, so validate, the pre-push hook and CI do not
@@ -289,6 +288,6 @@ How commits are made:
 | a status was judged, or work finished | `set <ID> --status … --note … [--evidence EXP-NNNN]` | the head; a close decision for done or dropped |
 | work spanning several TODOs began | `new arc "<title>" --members … --exps … --areas …` | `arcs/ARC-NNN.md` |
 | something was decided | `new decision <slug> --text … [--area <area>] [--context --why]` | `areas/<area>/decisions/` or `decisions/` |
-| a current value changed | (editor) its row in `state/<name>.csv`, then `set EXP-NNNN --state "<every table it is the source of>"` and `commit` both | `state/` |
+| a current value changed | (editor) its row in `state/<name>.csv`, then `set EXP-NNNN --state "<every table it is the source of>"`, which commits them with the experiment | `state/` |
 | a new area of work | `new area <id> "<title>" --prefix <PREFIX>` | `areas/<id>/README.md` |
 | where is it? | `find <keywords…> [--kind] [--status] [--body]`, `show <address>` | — |
