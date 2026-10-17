@@ -215,11 +215,16 @@ def read_kv(path: Path, where: str) -> dict:
     return fm
 
 
+class Refusal(Exception):
+    """A command that cannot go on with this ledger or on this machine (its settings, its day, the machine's name), said
+    before anything is written: run_command prints it and ends with exit code 2."""
+
+
 def settings(root: Path) -> dict:
     try:
         return read_kv(root / SETTINGS_FILE, SETTINGS_FILE)
     except FrontmatterError as exc:
-        raise SystemExit(str(exc))
+        raise Refusal(str(exc))
 
 
 def record_today(root: Path | None = None) -> str:
@@ -232,7 +237,7 @@ def record_today(root: Path | None = None) -> str:
     try:
         zone = ZoneInfo(str(name))
     except (ZoneInfoNotFoundError, ValueError):
-        raise SystemExit(f"{SETTINGS_FILE}: time zone {name!r} is unknown here (an IANA name such as Europe/Berlin; is tzdata installed?)")
+        raise Refusal(f"{SETTINGS_FILE}: time zone {name!r} is unknown here (an IANA name such as Europe/Berlin; is tzdata installed?)")
     return dt.datetime.fromtimestamp(now, zone).date().isoformat()
 
 
@@ -245,8 +250,8 @@ def record_host() -> str:
     name up to its first dot. `localhost` (a machine left with its install-time name) names no machine."""
     name = os.environ.get("LABLEDGER_HOST") or socket.gethostname().split(".")[0]
     if not HOST_RE.match(name) or name.lower() == "localhost":
-        raise SystemExit(f"LABLEDGER_HOST: {name!r} does not name this machine — set LABLEDGER_HOST (letters, digits, . _ -) in the "
-                         "shell profile, e.g. `export LABLEDGER_HOST=lab-server`")
+        raise Refusal(f"LABLEDGER_HOST: {name!r} does not name this machine — set LABLEDGER_HOST (letters, digits, . _ -) in "
+                      "the shell profile, e.g. `export LABLEDGER_HOST=lab-server`")
     return name
 
 
@@ -1835,7 +1840,8 @@ exit codes:
   0  done: written, committed and pushed, as far as the clone and the options allow
   1  a check found problems: validate, a refused commit, a stopped sync, a number the remote did not reserve, find
      with no match
-  2  nothing was written: a usage error, a rule the record would break, an unknown address, a session that cannot
+  2  nothing was written: a usage error, a rule the record would break, an unknown address, a record file that is
+     there already, settings this machine cannot use, a machine without a name (LABLEDGER_HOST), a session that cannot
      write where the command writes
   3  the record is written but not committed, or committed but not pushed: finish it with commit or sync; running
      new todo, exp or arc again would write a second record (setup --update is finished by running it again)"""
@@ -1875,7 +1881,11 @@ def cmd_review(args) -> int:
         for p in graph.problems:
             print(f"- {p}")
         return 1
-    today = dt.date.fromisoformat(args.today or record_today(args.root))
+    try:
+        today = dt.date.fromisoformat(args.today or record_today(args.root))
+    except ValueError:
+        print(f"--today {args.today!r} is not a date: YYYY-MM-DD", file=sys.stderr)
+        return 2
     cutoff = (today - dt.timedelta(days=STALE_DAYS)).isoformat()
     unabsorbed, stale = [], []
     for t in graph.todo_order():
@@ -2209,7 +2219,7 @@ def cmd_new_todo(args) -> int:
     path = todo.path
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
-        return 1
+        return 2
     path.write_text(todo.raw, encoding="utf-8")
     print(f"created {path.relative_to(root).as_posix()}")
     return written(args, [todo.rel], commit_subject(root, area, f"add {node_id} — {_oneline(args.title, 60)}"))
@@ -2247,7 +2257,7 @@ def cmd_new_exp(args) -> int:
     path, fm = exp.path, exp.fm
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
-        return 1
+        return 2
     path.parent.mkdir(exist_ok=True)  # the first experiment of a repository
     path.write_text(new_node_text("exp", fm, skeleton), encoding="utf-8")
     if exps is not None:  # a partial clone checks out the attachments of the EXPs it makes
@@ -2287,7 +2297,7 @@ def cmd_new_arc(args) -> int:
     path, fm = arc.path, arc.fm
     if path.exists():
         print(f"{path} already exists", file=sys.stderr)
-        return 1
+        return 2
     (root / "arcs").mkdir(exist_ok=True)
     path.write_text(new_node_text("arc", fm, skeleton), encoding="utf-8")
     print(f"created {path.relative_to(root).as_posix()} — write its goal, steps and exit criteria in the body; `new exp --arc {node_id}` adds experiments")
@@ -2393,10 +2403,10 @@ def _issue_to_move(graph: Graph, slug: str, target: str, allowed_from: tuple[str
         return 2
     if iss.status == target:
         print(f"issue:{slug} is already {target} ({iss.file})", file=sys.stderr)
-        return 1
+        return 2
     if iss.status not in allowed_from:
         print(f"issue:{slug} is {iss.status} ({iss.file}) — only {' or '.join(allowed_from)} issues can be {target}", file=sys.stderr)
-        return 1
+        return 2
     return iss
 
 
@@ -3559,7 +3569,11 @@ def cmd_commit(args) -> int:
         print(rels, file=sys.stderr)
         return 2
     ensure_hooks(root)
-    message = args.message if args.message is not None else Path(args.file).read_text(encoding="utf-8")
+    try:
+        message = args.message if args.message is not None else Path(args.file).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot read the commit message in {args.file} ({exc.strerror})", file=sys.stderr)
+        return 2
     try:
         new = commit_paths(root, rels, message)
     except CommitError as exc:
@@ -3894,6 +3908,14 @@ def update_ledger(path: Path) -> int:
         if subprocess.run([sys.executable, str(tool), "sync"]).returncode:
             problems.append("the ledger is not in sync with its remote (above): an update decides from what the ledger "
                             "holds, so it waits until sync passes")
+    try:  # the ledger's own tool commits what the update writes, and refuses settings this machine cannot use
+        zone = read_kv(path / f"{name}.yml", f"{name}.yml").get("timezone")
+        if zone:
+            ZoneInfo(str(zone))
+    except FrontmatterError as exc:
+        problems.append(str(exc))
+    except (ZoneInfoNotFoundError, ValueError):
+        problems.append(f"{name}.yml: time zone {zone!r} is unknown here, so the ledger's tool could not commit the update")
     if problems:
         print("nothing updated —", *problems, sep="\n  ", file=sys.stderr)
         return 2
@@ -3966,7 +3988,7 @@ def update_ledger(path: Path) -> int:
             sys.stdout.flush()
             rc = subprocess.run([sys.executable, str(tool), "commit", "-F", str(message), *writes, *finish]).returncode
             message.unlink()
-            if rc == 1:
+            if rc not in (0, UNFINISHED):
                 print("the files are written but not committed: fix what the commit names, then run this update again, which "
                       "commits them", file=sys.stderr)
                 rc = UNFINISHED
@@ -4268,15 +4290,22 @@ def unwritable_place(args) -> tuple[Path, str] | None:
 
 
 def run_command(args) -> int:
-    """The command, once this session is known to be able to write where it will: an agent's sandbox may let a session
-    read the ledger and write nothing, or nothing in .git, and the session hears so before anything is written."""
+    """The command, once this session is known to be able to write where it will (an agent's sandbox may let a session
+    read the ledger and write nothing, or nothing in .git) and a command that writes has read the settings and the day it
+    stamps: the session hears what stops it before anything is written, with exit code 2."""
     stop = unwritable_place(args)
     if stop:
         print(f"stopped before writing anything — this session cannot write {stop[0]} ({stop[1]}). A session that may read "
               "the ledger but not write it (an agent's sandbox) can still run find, show, review and validate; run this "
               "command where the ledger and its .git can be written", file=sys.stderr)
         return 2
-    return args.func(args)
+    try:
+        if args.cmd in ("new", "set", "resolve", "promote", "commit"):
+            record_today(args.root)  # the settings and the day it stamps, read before the command writes anything
+        return args.func(args)
+    except Refusal as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -27,8 +27,9 @@ of it; a new machine clones the ledger and puts its skill on with `setup` ([SETU
 
 Each machine has a name: `LABLEDGER_HOST` when it is set (in the shell profile), else the host name up to its first
 dot. `new exp` writes it into `host`, the machine whose local paths the body names (`--host` names another, for a run
-made elsewhere), and the counter's log records it. On a machine called `localhost`, `new exp` without `--host` and
-every number reservation refuse to run until `LABLEDGER_HOST` is set.
+made elsewhere), and the counter's log records it. On a machine called `localhost`, or with a `LABLEDGER_HOST` that is
+not a host name, `new exp` without `--host` and every number reservation refuse to run until `LABLEDGER_HOST` names the
+machine.
 
 Write commands stamp today in `timezone` from `labledger.yml`, or in each machine's own time zone when that names none.
 *Guidance:* a ledger written from several time zones names one.

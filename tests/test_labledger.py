@@ -372,7 +372,7 @@ def test_new_issue_promote_and_resolve(repo: Path, capsys):
     text = issue.read_text(encoding="utf-8")
     assert "\nstatus: promoted\n" in text and text.endswith(f"- Path: main.c:151\n- Promoted ({TODAY}): LAB-002\n")
     assert "from: [issue:board-hangs]" in todo_path(repo, "LAB-002").read_text(encoding="utf-8"), "promote links the TODO back"
-    assert run(repo, "promote", "issue", "board-hangs", "--to", "LAB-002") == 1, "already promoted"
+    assert run(repo, "promote", "issue", "board-hangs", "--to", "LAB-002") == 2, "already promoted"
     assert run(repo, "resolve", "issue", "board-hangs", "--by", "EXP-0001", "--note", "does not reproduce") == 0
     text = issue.read_text(encoding="utf-8")
     assert "\nstatus: resolved\n" in text
@@ -604,6 +604,12 @@ def test_show_lists_relations_with_status(repo: Path, capsys):
 
 
 
+def test_usage_errors_end_with_exit_code_2(grepo: Path, capsys):
+    assert run(grepo, "review", "--today", "yesterday") == 2 and "--today 'yesterday' is not a date" in capsys.readouterr().err
+    assert run(grepo, "commit", "-F", "no-such-message.txt", "LAB-001") == 2
+    assert "cannot read the commit message in no-such-message.txt" in capsys.readouterr().err
+
+
 def test_write_commands_refuse_records_that_would_not_validate(repo: Path, capsys):
     snapshot = {p: p.read_bytes() for p in repo.rglob("*.md")}
     refused = [
@@ -669,7 +675,7 @@ def test_a_refusal_says_how_to_fix_it(repo: Path, capsys):
     assert run(repo, "fmt", "--check") == 1 and "LAB-001.md: line 7 is `priority:  P1`" in capsys.readouterr().out
 
 
-def test_json_output_is_the_whole_of_stdout(repo: Path, capsys):
+def test_json_output_is_the_whole_of_stdout(repo: Path, capsys, monkeypatch):
     """With --json a command prints one JSON object and nothing else on stdout, so an agent parses it instead of reading
     prose: validate's verdict, find's matches, a record with what the tool computes about it, the review queue's
     addresses, and the record a write made (what it said along the way goes to stderr)."""
@@ -685,6 +691,9 @@ def test_json_output_is_the_whole_of_stdout(repo: Path, capsys):
     assert [g["group"] for g in output("review")["groups"]] == list(range(1, 9))
     assert output("new", "exp", "second") == {"address": "EXP-0002", "file": "experiments/EXP-0002.md", "exit": 0}
     assert output("new", "exp", "refused", "--affects", "NOPE-001", rc=2) == {"exit": 2}
+    monkeypatch.setenv("LABLEDGER_HOST", "no such host")
+    assert output("new", "exp", "nameless", rc=2) == {"exit": 2}, "a machine without a name refuses with the same line"
+    monkeypatch.setenv("LABLEDGER_HOST", "test-server")
     assert output("new", "issue", "lab", "slow-boot", "--symptom", "boots slowly")["address"] == "issue:slow-boot"
 
 
@@ -823,10 +832,14 @@ def test_every_stamped_date_is_in_the_ledger_s_time_zone(tmp_path: Path, utc_ser
     assert run(root, "new", "todo", "lab", "second") == 0
     assert "created: 2026-09-28\n" in todo_path(root, "LAB-002").read_text(encoding="utf-8"), "without a zone, the machine's"
     settings.write_text("timezone: Mars/Olympus\n", encoding="utf-8")
-    with pytest.raises(SystemExit, match="Mars/Olympus"):
-        run(root, "new", "todo", "lab", "third")
-    assert not todo_path(root, "LAB-003").exists()
-    capsys.readouterr()
+    exps = sorted((root / "experiments").glob("EXP-*.md"))
+    for argv in (("new", "todo", "lab", "third"), ("new", "exp", "dated", "--date", "2026-09-30")):
+        assert run(root, *argv) == 2 and "time zone 'Mars/Olympus' is unknown here" in capsys.readouterr().err, argv
+    settings.write_text("timezone Asia/Seoul\n", encoding="utf-8")
+    assert run(root, "new", "decision", "d2", "--text", "x", "--date", "2026-09-30") == 2 and "labledger.yml" in capsys.readouterr().err
+    assert not todo_path(root, "LAB-003").exists() and sorted((root / "experiments").glob("EXP-*.md")) == exps
+    assert not (root / "areas" / "lab" / "decisions" / "2026-09-30-d2.md").exists(), "a date given is no way around the settings"
+    settings.write_text("timezone: Mars/Olympus\n", encoding="utf-8")
     assert run(root, "validate") == 1 and "timezone `Mars/Olympus` is not an IANA time zone" in capsys.readouterr().out
 
 
@@ -840,15 +853,13 @@ def test_an_exp_names_the_server_its_paths_are_on(repo: Path, monkeypatch, capsy
     monkeypatch.setattr(ll.socket, "gethostname", lambda: "box.example.org")
     assert run(repo, "new", "exp", "this machine") == 0 and "\nhost: box\n" in exp(2), "else the host name up to its first dot"
     monkeypatch.setattr(ll.socket, "gethostname", lambda: "localhost.localdomain")
-    with pytest.raises(SystemExit, match="LABLEDGER_HOST"):
-        run(repo, "new", "exp", "a machine without a name")
+    assert run(repo, "new", "exp", "a machine without a name") == 2 and "LABLEDGER_HOST" in capsys.readouterr().err
     assert not (repo / "experiments" / "EXP-0003.md").exists(), "localhost names no server"
     monkeypatch.setenv("LABLEDGER_HOST", "node-2")
     assert run(repo, "new", "exp", "ran on the lab server", "--host", "lab-server") == 0 and "\nhost: lab-server\n" in exp(3)
     assert run(repo, "set", "EXP-0003", "--host", "node-2") == 0 and "\nhost: node-2\n" in exp(3)
     monkeypatch.setenv("LABLEDGER_HOST", "no such host")
-    with pytest.raises(SystemExit, match="LABLEDGER_HOST"):
-        run(repo, "new", "exp", "x")
+    assert run(repo, "new", "exp", "x") == 2 and "'no such host' does not name this machine" in capsys.readouterr().err
     assert not (repo / "experiments" / "EXP-0004.md").exists()
     (repo / "experiments" / "EXP-0001.md").write_text(exp(1).replace("host: test-server\n", ""), encoding="utf-8")
     assert run(repo, "validate") == 0, "host is optional: a one-machine ledger does not need it"
@@ -867,25 +878,34 @@ def test_set_writes_an_exp_s_model_and_commit_as_new_exp_does(repo: Path):
     assert run(repo, "render", "--check") == 0 and run(repo, "validate") == 0
 
 
-def test_a_server_without_a_name_reserves_no_number(grepo: Path, origin: Path, monkeypatch):
+def test_a_server_without_a_name_reserves_no_number(grepo: Path, origin: Path, monkeypatch, capsys):
     monkeypatch.delenv("LABLEDGER_HOST")
     monkeypatch.setattr(ll.socket, "gethostname", lambda: "localhost.localdomain")
     for argv in (("new", "todo", "lab", "x"), ("new", "arc", "x")):
-        with pytest.raises(SystemExit, match="LABLEDGER_HOST"):
-            run(grepo, *argv)
+        assert run(grepo, *argv) == 2 and "LABLEDGER_HOST" in capsys.readouterr().err
     assert git(origin, "for-each-ref", "refs/labledger") == "" and not todo_path(grepo, "LAB-002").exists()
+
+
+@pytest.mark.parametrize("argv, rel", [(("new", "todo", "lab", "x"), "areas/lab/LAB-002.md"),
+                                       (("new", "exp", "x"), "experiments/EXP-0002.md"), (("new", "arc", "x"), "arcs/ARC-002.md")])
+def test_a_new_record_whose_file_is_there_already_writes_nothing(repo: Path, capsys, argv, rel):
+    """A file under the number a new record takes, which is no record yet (a session's unfinished copy), stays as it is,
+    and the refusal ends with the exit code of a write that wrote nothing."""
+    (repo / rel).write_text("not a record yet\n", encoding="utf-8")
+    assert run(repo, *argv) == 2
+    assert "already exists" in capsys.readouterr().err and (repo / rel).read_text(encoding="utf-8") == "not a record yet\n"
 
 
 def test_promote_only_from_open_and_resolve_from_open_or_promoted(repo: Path, capsys):
     assert run(repo, "new", "issue", "lab", "a", "--symptom", "a") == 0
     assert run(repo, "new", "issue", "lab", "b", "--symptom", "b") == 0
     assert run(repo, "resolve", "issue", "a", "--by", "EXP-0001") == 0
-    assert run(repo, "promote", "issue", "a", "--to", "LAB-001") == 1, "a resolved issue is not promoted"
+    assert run(repo, "promote", "issue", "a", "--to", "LAB-001") == 2, "a resolved issue is not promoted"
     assert "only open issues can be promoted" in capsys.readouterr().err
     assert run(repo, "promote", "issue", "b", "--to", "LAB-001") == 0
-    assert run(repo, "promote", "issue", "b", "--to", "LAB-001") == 1, "already promoted"
+    assert run(repo, "promote", "issue", "b", "--to", "LAB-001") == 2, "already promoted"
     assert run(repo, "resolve", "issue", "b", "--by", "EXP-0001") == 0, "a promoted issue can be resolved"
-    assert run(repo, "resolve", "issue", "b", "--by", "EXP-0001") == 1, "already resolved"
+    assert run(repo, "resolve", "issue", "b", "--by", "EXP-0001") == 2, "already resolved"
     assert run(repo, "validate") == 0
 
 
@@ -1187,6 +1207,20 @@ def server(origin: Path, path: Path) -> Path:
     git(path, "config", "user.name", path.name)
     git(path, "config", "user.email", f"{path.name}@example.org")
     return path
+
+
+def test_sync_takes_in_settings_this_machine_cannot_use_and_their_fix(grepo: Path, origin: Path, tmp_path: Path):
+    """sync stamps no date: a machine that does not know the ledger's time zone still takes in what others pushed,
+    and so the fix of those settings, while the commands that stamp a day refuse until then."""
+    other = server(origin, tmp_path / "server-b")
+    for zone in ("Mars/Olympus", "UTC"):
+        (other / "labledger.yml").write_text(f"timezone: {zone}\n", encoding="utf-8")
+        git(other, "add", "labledger.yml")
+        git(other, "commit", "-q", "--no-verify", "-m", f"zone {zone}")
+        git(other, "push", "-q", "--no-verify", "origin", "main")
+        assert run(grepo, "sync") == 0, zone
+        assert (grepo / "labledger.yml").read_text(encoding="utf-8") == f"timezone: {zone}\n"
+        assert run(grepo, "new", "todo", "lab", f"after {zone}") == (2 if zone == "Mars/Olympus" else 0)
 
 
 def test_two_servers_write_unrelated_records_and_sync(grepo: Path, origin: Path, tmp_path: Path, capsys):
@@ -1812,6 +1846,20 @@ def made_by_setup(tmp_path: Path, monkeypatch, remote: str = "none") -> tuple[Pa
 def update_from(source: Path, ledger: Path, **env: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(source / "scripts" / "labledger.py"), "setup", "--update", str(ledger)],
                           capture_output=True, text=True, env={**os.environ, **env})
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
+def test_an_update_waits_for_settings_its_ledger_can_commit_with(tmp_path: Path, monkeypatch):
+    """The ledger's own tool commits what an update writes, and it refuses settings this machine cannot use: the update
+    says so before it writes anything."""
+    ledger, source = made_by_setup(tmp_path, monkeypatch)
+    (ledger / "labnotes.yml").write_text("timezone: Mars/Olympus\n", encoding="utf-8")
+    git(ledger, "commit", "-q", "--no-verify", "-am", "a zone this machine does not know")
+    head = git(ledger, "rev-parse", "HEAD")
+    release(source, "9.9.9", "SETUP.md")
+    r = update_from(source, ledger)
+    assert r.returncode == 2 and "time zone 'Mars/Olympus' is unknown here" in r.stderr, r.stdout + r.stderr
+    assert git(ledger, "rev-parse", "HEAD") == head and git(ledger, "status", "--porcelain") == "", "nothing written"
 
 
 @pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
