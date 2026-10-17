@@ -1745,6 +1745,17 @@ def tree_problems(root: Path, committed: bool = False, tracked: set[str] | None 
     return graph, problems
 
 
+EXIT_CODES = """\
+exit codes:
+  0  done: written, committed and pushed, as far as the clone and the options allow
+  1  a check found problems: validate, a refused commit, a stopped sync, a number the remote did not reserve, find
+     with no match
+  2  nothing was written: a usage error, a rule the record would break, an unknown address, a session that cannot
+     write where the command writes
+  3  the record is written but not committed, or committed but not pushed: finish it with commit or sync; running
+     new todo, exp or arc again would write a second record (setup --update is finished by running it again)"""
+
+
 def cmd_validate(args) -> int:
     root = args.root
     graph, problems = tree_problems(root, committed=args.committed)
@@ -3419,7 +3430,11 @@ def written(args, rels: list[str], subject: str, body: str = "") -> int:
     except OSError as exc:  # a view this session may not write: the record is committed all the same
         print(f"{VIEWS}/ not rendered ({exc.strerror}: {exc.filename}); the record is written — `render` rebuilds them",
               file=sys.stderr)
-    return 0 if autocommit(args, rels, subject, body) else UNFINISHED
+    if autocommit(args, rels, subject, body):
+        return 0
+    again = " — running `new` again would write a second record" if args.cmd == "new" and args.kind in ("todo", "exp", "arc") else ""
+    print(f"{address_of(rels[0])} is written: finish it with `commit`, or `sync` once it is committed{again}", file=sys.stderr)
+    return UNFINISHED
 
 
 def commit_targets(root: Path, graph: Graph, targets: list[str]) -> list[str] | str:
@@ -4004,7 +4019,7 @@ def main(argv: list[str]) -> int:
     def command(**kwargs) -> argparse.ArgumentParser:
         return argparse.ArgumentParser(parents=[common], **kwargs)
 
-    parser = command(prog="labledger.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = command(prog="labledger.py", description=__doc__, epilog=EXIT_CODES, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"{SOURCE_NAME} {VERSION} ({SOURCE_URL})",
                         help=f"the version of {SOURCE_NAME} this tool was taken from, and where its source is")
     sub = parser.add_subparsers(dest="cmd", required=True, parser_class=command)

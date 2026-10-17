@@ -1000,7 +1000,9 @@ def test_commit_refuses_a_record_whose_links_stay_behind(grepo: Path, capsys):
     assert "affects unknown LAB-002" in capsys.readouterr().err
     assert git(grepo, "rev-parse", "HEAD") == head, "a refused commit moves nothing"
     assert run(grepo, "set", "EXP-0002", "--summary", "short summary") == ll.UNFINISHED, "written, not committed: not to be run again"
-    assert "not committed" in capsys.readouterr().err and git(grepo, "rev-parse", "HEAD") == head, "nor does a refused auto-commit"
+    err = capsys.readouterr().err
+    assert "not committed" in err and git(grepo, "rev-parse", "HEAD") == head, "nor does a refused auto-commit"
+    assert "EXP-0002 is written: finish it with `commit`, or `sync` once it is committed" in err and "second record" not in err
     assert run(grepo, "commit", "-m", "x", "EXP-0002", "LAB-002") == 0
     assert git(grepo, "status", "--porcelain") == ""
     assert run(grepo, "commit", "-m", "x", "NOPE-404") == 2
@@ -1159,6 +1161,7 @@ def test_an_unreachable_remote_is_not_reported_as_another_servers_push(grepo: Pa
     assert run(grepo, "--offline", "new", "exp", "x") == ll.UNFINISHED, "committed, not pushed"
     out, err = capsys.readouterr()
     assert "committed" in out and "not pushed" in err and "lacks" not in err
+    assert "running `new` again would write a second record" in err, "a new number each time it runs"
 
 
 def server(origin: Path, path: Path) -> Path:
