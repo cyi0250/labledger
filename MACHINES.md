@@ -34,10 +34,12 @@ machine.
 Write commands stamp today in `timezone` from `labledger.yml`, or in each machine's own time zone when that names none.
 *Guidance:* a ledger written from several time zones names one.
 
-## Files on several machines
+## Runs on another machine
 
-A manifest's rows name their machine: `manifest`, `--check` and `--move` act on the files of the machine they run on,
-so they run where the files are.
+`code` reads a git checkout, so it runs on the machine that has the checkout, and every machine that writes to the
+ledger can push to its code vault. *Guidance:* for a run on a server from a copy of a work tree, call `code` where the
+work tree is, just before copying it, so the snapshot is what the server runs. A manifest's rows name their machine:
+`manifest`, `--check` and `--move` act on the files of the machine they run on, so they run where the files are.
 
 ## Sync
 

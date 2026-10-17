@@ -92,7 +92,7 @@ TODO_LIST_FIELDS = ("from", "depends_on", "supersedes", "resolves", "evidence")
 TODO_KEY_ORDER = ("id", "type", "title", "area", "status", "priority", "created", "updated",
                   "status_note") + TODO_LIST_FIELDS
 EXP_REQUIRED = ("id", "type", "title", "date", "status", "affects", "state", "summary")
-EXP_KEY_ORDER = ("id", "type", "title", "date", "host", "status", "model", "commit", "arc", "affects",
+EXP_KEY_ORDER = ("id", "type", "title", "date", "host", "status", "model", "commit", "code", "arc", "affects",
                  "state", "data", "summary", "superseded_by")
 ARC_REQUIRED = ("id", "type", "title", "status", "created", "updated", "members", "exps")
 ARC_KEY_ORDER = ("id", "type", "title", "status", "created", "updated", "status_note", "areas",
@@ -102,7 +102,7 @@ INV_KEY_ORDER = ("id", "type", "title", "area", "date", "updated", "status", "st
 AREA_REQUIRED = ("id", "type", "title", "prefix")
 AREA_KEY_ORDER = ("id", "type", "title", "prefix", "order")
 KEY_ORDER = {"todo": TODO_KEY_ORDER, "exp": EXP_KEY_ORDER, "arc": ARC_KEY_ORDER, "inv": INV_KEY_ORDER, "area": AREA_KEY_ORDER}
-LIST_FIELDS = {"todo": TODO_LIST_FIELDS, "exp": ("affects", "data"), "arc": ("areas", "members", "exps"), "inv": ("affects",), "area": ()}
+LIST_FIELDS = {"todo": TODO_LIST_FIELDS, "exp": ("code", "affects", "data"), "arc": ("areas", "members", "exps"), "inv": ("affects",), "area": ()}
 H1_KINDS = ("todo", "exp", "arc", "area")  # inv documents keep their own H1
 TODO_SKELETON = """## Problem
 
@@ -126,8 +126,9 @@ EXP_SKELETON = """## Question
 
 ## Setup
 
-<What was changed and where its configuration lives: everything needed to run it again. `manifest <ID> <path> …`
-records the files outside the ledger it reads or writes.>
+<What was changed and where its configuration lives: everything needed to run it again. Before each run,
+`code <ID> <repository or folder> …` records the code it runs; `manifest <ID> <path> …` records the files outside the
+ledger it reads or writes.>
 
 ## Commands
 
@@ -197,7 +198,7 @@ LABELS = {  # the words the write commands put into record bodies
 NAME = "labledger"  # what this ledger is called: its tool, settings, skill, commit messages, variables and refs carry it
 VERSION = "0.1.1"  # the tool's version; a ledger's copy keeps the version it was taken from
 SETTINGS_FILE = "labledger.yml"  # the ledger's settings: `key: value` lines, every key optional
-SETTINGS_KEYS = ("timezone", "commit_prefix", "language")
+SETTINGS_KEYS = ("timezone", "commit_prefix", "language", "code_vault")
 COMMIT_PREFIX = NAME  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
 TEMPLATES_DIR = "templates"  # <kind>.md replaces a body skeleton (SKELETONS), labels.yml any of the LABELS
 # EXP `state`: `n/a` (a parenthesised note may follow) when the experiment is the source of no state/ row; else the
@@ -1613,6 +1614,8 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
             out.append(f"{rel}: superseded needs `superseded_by`")
         if isinstance(fm.get("data"), list) or status == "final":
             out += data_problems(graph, node)
+        if isinstance(fm.get("code"), list):
+            out += code_problems(node)
         out += manifest_problems(graph, node)
         if fm.get("superseded_by") and fm["superseded_by"] not in graph.exps:
             out.append(f"{rel}: superseded_by unknown {fm['superseded_by']}")
@@ -1681,6 +1684,8 @@ def validate_cross(graph: Graph, root: Path) -> list[str]:
             out.append(f"{SETTINGS_FILE}: timezone `{graph.settings['timezone']}` is not an IANA time zone name here (like Europe/Berlin)")
     if "commit_prefix" in graph.settings and not SLUG_RE.match(str(graph.settings["commit_prefix"])):
         out.append(f"{SETTINGS_FILE}: commit_prefix `{graph.settings['commit_prefix']}` must be one word of [A-Za-z0-9._-]")
+    if "code_vault" in graph.settings and (not str(graph.settings["code_vault"]).strip() or " " in str(graph.settings["code_vault"])):
+        out.append(f"{SETTINGS_FILE}: code_vault `{graph.settings['code_vault']}` must be a git URL or path (where `code` keeps its snapshots)")
     for key in sorted(set(graph.labels) - set(LABELS)):
         out.append(f"{TEMPLATES_DIR}/labels.yml: unknown label `{key}` (allowed: {', '.join(LABELS)})")
     if "{evidence}" not in graph.labels["closed_by"]:
@@ -1810,8 +1815,13 @@ def validate_help() -> str:
         "that holds only numbers ends its name with their unit in brackets: latency[ms]; [1] for a count or a ratio; [id] "
         "for numbers that name things. A JSON file has to parse. A table is read where it is on disk; where it is "
         "not (a partial clone, CI), git must have it.",
-        f"Files. {ATTACHMENTS}EXP-NNNN/{MANIFEST}, where there is one, has the columns {' '.join(MANIFEST_COLUMNS)}: an "
-        "absolute path, a host name, a whole number of bytes and 64 hex digits, each path on each host once.",
+        "Code and files. An experiment's `code` lists the code its runs used, as the `code` command writes it: "
+        "\"<label>: <name> <commit>\" for a commit of the repository <name>, \"<label>: <name> <commit> from <commit>\" "
+        "for a snapshot of uncommitted work kept in the code vault, \"<label>: <name> <commit> from folder\" for a folder "
+        "outside git; or the single entry \"n/a (why)\". A label and a name go together once. "
+        f"{ATTACHMENTS}EXP-NNNN/{MANIFEST}, where there is one, has the columns {' '.join(MANIFEST_COLUMNS)}: an absolute "
+        "path, a host name, a whole number of bytes and 64 hex digits, each path on each host once. A commit that makes "
+        "an experiment final needs its `code` (commit --help).",
         f"State. A state table, state/<name>.csv, has the columns {', '.join(STATE_COLUMNS)} (optional: "
         f"{', '.join(STATE_OPTIONAL)}; every other column is a condition the value holds under). item, value and commit "
         f"are filled, kind is {' or '.join(STATE_KINDS)}, measured_at is YYYY-MM-DD, exp is a final experiment whose "
@@ -1819,8 +1829,8 @@ def validate_help() -> str:
         "of conditions across state/. An experiment's `state` names the tables it is the source of, each existing and "
         "citing it, or says n/a. Every state table, CSV or Markdown, names only experiments that exist, each written in "
         "full (EXP-0007 / EXP-0008, not EXP-0007/0008); a Markdown state table is otherwise free text.",
-        f"Settings and templates. {SETTINGS_FILE} holds only {' '.join(SETTINGS_KEYS)}: an IANA time zone, and a "
-        f"commit_prefix of one word of `A-Za-z0-9._-`. {TEMPLATES_DIR}/ holds only "
+        f"Settings and templates. {SETTINGS_FILE} holds only {' '.join(SETTINGS_KEYS)}: an IANA time zone, a "
+        f"commit_prefix of one word of `A-Za-z0-9._-`, and a code_vault that is a git URL or path. {TEMPLATES_DIR}/ holds only "
         f"{' '.join(f'{kind}.md' for kind in SKELETONS)} and labels.yml, which holds only the labels SETUP.md names, its "
         "closed_by holding {evidence}.",
     ]
@@ -1832,24 +1842,25 @@ def fill_help(text: str) -> str:
     return textwrap.fill(text.replace("\n", " "), 116, break_on_hyphens=False, break_long_words=False)
 
 
-COMMIT_HELP = """\
+COMMIT_HELP = fill_help("""\
 commit commits the paths it is given and nothing else: every other uncommitted change stays as it was, and an EXP
 brings its attachment folder. It refuses a clone that cannot take a commit (not a git work tree or not its top, a
 detached HEAD, a merge, cherry-pick, revert or rebase in progress), an unknown address, a path outside the ledger,
 and in a partial clone a sparse checkout of another form or a path that reaches attachments left off disk
 (MACHINES.md). The commit is checked on its own tree as validate checks a ledger (validate --help), views/ refused,
-and for two things only a commit shows: an investigation or issue it changes carries a new `updated`, today's or
-another than its last commit had (`set inv:<name>` or `set issue:<slug>` raises it to today); and where the clone
-has an upstream and a copy of the counter, which its first `new` fetches, a TODO, experiment or arc it adds has a
-number no higher than that copy (MACHINES.md, Numbers). The pre-commit hook makes the same checks on a hand `git
-commit`. The commit is then pushed; a push that fails leaves it local for the next write, `commit` or `sync` to
-push, and ends with exit code 3."""
+and for three things only a commit shows: an investigation or issue it changes carries a new `updated`, today's or
+another than its last commit had (`set inv:<name>` or `set issue:<slug>` raises it to today); where the clone has an
+upstream and a copy of the counter, which its first `new` fetches, a TODO, experiment or arc it adds has a number no
+higher than that copy (MACHINES.md, Numbers); and an experiment it makes final has `code`, the code its runs used
+(`code EXP-NNNN <repository or folder> …` before a run) or "n/a (why)". The pre-commit hook makes the same checks on
+a hand `git commit`. The commit is then pushed; a push that fails leaves it local for the next write, `commit` or `sync` to
+push, and ends with exit code 3.""")
 
 EXIT_CODES = """\
 exit codes:
   0  done: written, committed and pushed, as far as the clone and the options allow
   1  a check found problems: validate, a refused commit, a stopped sync, a number the remote did not reserve, a
-     manifest whose files changed, find with no match
+     snapshot the code vault did not take, a manifest whose files changed, find with no match
   2  nothing was written: a usage error, a rule the record would break, an unknown address, a record file that is
      there already, settings this machine cannot use, a machine without a name (LABLEDGER_HOST), a session that cannot
      write where the command writes
@@ -2272,7 +2283,8 @@ def cmd_new_exp(args) -> int:
     path.write_text(new_node_text("exp", fm, skeleton), encoding="utf-8")
     if exps is not None:  # a partial clone checks out the attachments of the EXPs it makes
         include_attachments(root, exps, [node_id])
-    print(f"created {path.relative_to(root).as_posix()} — when the results are in: `set {node_id} --status final --summary … --data …`")
+    print(f"created {path.relative_to(root).as_posix()} — before each run: `code {node_id} <repository or folder> …`; when the "
+          f"results are in: `set {node_id} --status final --summary … --data …`")
     return written(args, [path.relative_to(root).as_posix()], commit_subject(root, "exp", f"open {node_id} — {_oneline(args.title, 60)}"),
                    _flat(args.summary) if args.summary else "")
 
@@ -2540,7 +2552,8 @@ def cmd_new_inv(args) -> int:
 
 SET_OPTIONS = {"status": ("todo", "exp", "arc", "inv"), "note": ("todo", "arc", "inv"), "priority": ("todo",),
                "evidence": ("todo",), "affects": ("exp", "inv"), "summary": ("exp", "inv"), "state": ("exp",),
-               "data": ("exp",), "superseded_by": ("exp",), "host": ("exp",), "model": ("exp",), "commit": ("exp",)}
+               "data": ("exp",), "superseded_by": ("exp",), "host": ("exp",), "model": ("exp",), "commit": ("exp",),
+               "code": ("exp",)}
 
 
 def affects_key(entry: str) -> str:
@@ -2632,12 +2645,21 @@ def cmd_set(args) -> int:
     if "commit" in given:
         fm["commit"] = given["commit"]
         changes.append("commit")
+    if "code" in given:  # the `code` command writes the entries; set says why there are none
+        if not DATA_NA_RE.match(given["code"].strip()):
+            print(f"--code takes \"n/a (why)\" only — `code {node.id} <repository or folder> …` records the code a run uses",
+                  file=sys.stderr)
+            return 2
+        fm["code"] = [_flat(given["code"])]
+        changes.append("code")
     if kind in ("todo", "arc", "inv"):
         before = fm.get("updated") or fm.get("date")  # an investigation without `updated` was last changed the day it was made
         if before != today:
             changes.append(f"updated {before} → {today}")
         fm["updated"] = today
     problems = check_node(graph, kind, replace(node, fm=fm))
+    if kind == "exp" and fm.get("status") == "final" and node.fm.get("status") != "final" and not fm.get("code"):
+        problems.append(uncoded_message(node.rel, node.id))  # what its commit would be refused for
     if problems:
         return refuse(problems)
     close_block = None
@@ -2822,7 +2844,7 @@ def commit_paths(root: Path, rels: list[str], message: str, attempts: int = 5) -
                 _git(root, "add", "-A", "--", *present, env=env)
             tree_dir = Path(tmp) / "tree"
             graph, problems = tree_problems(tree_dir, committed=True, tracked=_materialize(root, env, tree_dir))
-            problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env)
+            problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env) + uncoded(root, graph, head, env)
             if problems:
                 raise CommitError("the commit would not validate on its own:\n" + "\n".join(f"  - {p}" for p in problems))
             tree = _git(root, "write-tree", "--missing-ok", env=env).strip()  # an attachment a partial clone lacks is on the upstream
@@ -2909,14 +2931,15 @@ def _ssh_shared(root: Path, remote: str) -> str | None:
     starts it itself, its stdio on /dev/null: a master forked by git's ssh inherits the caller's stderr, and an
     OpenSSH that leaves it open there would make the command wait until the connection expires. None when `remote`
     is not reached over SSH or no connection comes up — git then connects on its own."""
-    url = _run(root, "remote", "get-url", remote).stdout.strip()
+    url = _run(root, "remote", "get-url", remote).stdout.strip() or remote  # a remote's name, or its URL
     if url not in _SSH_SHARED:
         _SSH_SHARED[url] = _ssh_start(url)
     return _SSH_SHARED[url]
 
 
 def _network_env(root: Path, remote: str) -> dict[str, str]:
-    """Never let a push or fetch stop to ask for a password or passphrase: fail instead, and the commit stays local.
+    """Never let a push or fetch to `remote` (a remote of `root`, or a URL) stop to ask for a password or passphrase: fail
+    instead, and the commit stays local.
     With LABLEDGER_SSH_SHARE=1, git shares one SSH connection to the host (_ssh_shared) — unless the caller or this clone
     chose its own ssh."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
@@ -3429,7 +3452,7 @@ def _hook_pre_commit(root: Path) -> int:
     env = dict(os.environ)  # git names the index being committed in GIT_INDEX_FILE
     with tempfile.TemporaryDirectory(prefix="labledger-hook-") as tmp:
         graph, problems = tree_problems(Path(tmp), committed=True, tracked=_materialize(root, env, Path(tmp)))
-        problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env)
+        problems += unbumped(root, graph, head, env) + unissued(root, graph, head, env) + uncoded(root, graph, head, env)
     if problems:
         print("labledger pre-commit: this commit would not validate:", *(f"  - {p}" for p in problems), f"  {HOOK_HINT}",
               sep="\n", file=sys.stderr)
@@ -3648,10 +3671,35 @@ def cmd_attachments(args) -> int:
     return 0
 
 
-# ───────────────────────────── the files a run used ─────────────────────────────
+# ───────────────────────────── the code and the files a run used ─────────────────────────────
 
+CODE_REF = "refs/labledger/code"  # a snapshot sits at <CODE_REF>/<name>/EXP-NNNN/<commit> in the code vault
+CODE_LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # which run of an experiment: run, before, after, …
+CODE_ENTRY_RE = re.compile(r"^([a-z0-9][a-z0-9._-]*): ([A-Za-z0-9][A-Za-z0-9._-]*) ([0-9a-f]{40})(?: from ([0-9a-f]{40}|folder))?$")
+CODE_FILE_MAX = 1_000_000  # bytes: a file git does not track that is larger is data, which the manifest lists instead
+CODE_NEW_MAX = 20_000_000  # bytes: the smaller such files together past this stop `code` (build outputs to ignore, most often)
+CODE_PUSH_TIMEOUT = 600  # seconds: a repository's first snapshot carries all its files
+SNAPSHOT_ENV = {"GIT_AUTHOR_NAME": "labledger", "GIT_AUTHOR_EMAIL": "code@labledger.invalid", "GIT_AUTHOR_DATE": "1970-01-01T00:00:00+0000",
+                "GIT_COMMITTER_NAME": "labledger", "GIT_COMMITTER_EMAIL": "code@labledger.invalid",
+                "GIT_COMMITTER_DATE": "1970-01-01T00:00:00+0000"}  # the same files for the same run are the same commit, on any machine
 MANIFEST = "manifest.tsv"  # experiments/attachments/EXP-NNNN/manifest.tsv: the files outside the ledger its runs used
 MANIFEST_COLUMNS = ("path", "host", "bytes[B]", "sha256")
+CODE_HELP = fill_help(f"""\
+code records the code each run of an experiment uses, before the run. For every repository named (a folder in one
+names the repository), every submodule checked out under it and every repository inside it that git does not track, the
+entry is its commit when its work tree holds exactly that commit and one of its remote-tracking branches holds the
+commit; otherwise the entry is a snapshot: one commit of exactly the files of the work tree, the untracked ones included
+and the ignored ones left out, kept in the code vault as {CODE_REF}/<name>/EXP-NNNN/<commit>, which clones of the
+ledger do not fetch, and in the repository as {CODE_REF}/EXP-NNNN/<commit>. A folder outside git, or one its
+repository ignores, is kept the same way, and the repositories in it are entries of their own. The work trees, their
+indexes and branches stay as they are, and no snapshot ref is ever moved. A file git does not track that is over
+{CODE_FILE_MAX // 10**6} MB is data: its size and sha256 go into the experiment's manifest instead (manifest --help);
+the other such files together past {CODE_NEW_MAX // 10**6} MB stop the command, nothing recorded. An entry goes by
+the last part of its repository's origin URL, or by its folder's name when an entry before it goes by that; the
+entries go into the experiment's `code`, one per label and name, and `code` again with the same label replaces them.
+The code vault is `code_vault` in {SETTINGS_FILE}, else the remote the ledger pushes
+to, else the ledger's own repository. `code EXP-NNNN --restore <name> --to <folder>` writes the files of that entry into
+a new folder.""")
 MANIFEST_HELP = fill_help(f"""\
 manifest lists the files outside the ledger that an experiment's runs read or wrote, one row per file in
 {ATTACHMENTS}EXP-NNNN/{MANIFEST}: its path, the machine, its size and its sha256 (a folder gives every file under
@@ -3664,6 +3712,49 @@ and names the experiments whose bodies still say <old>. A manifest that does not
 
 class CodeError(Exception):
     pass
+
+
+def uncoded_message(rel: str, exp_id: str) -> str:
+    return (f"{rel}: turns final without `code` — record the code its runs used with `code {exp_id} <repository or "
+            f"folder> …` (before a run), or say why there is none: `set {exp_id} --code \"n/a (why)\"`")
+
+
+def uncoded(root: Path, graph: Graph, head: str, env: dict[str, str]) -> list[str]:
+    """Experiments that the index `env` makes final with an empty `code`: the code a run used is recorded before the
+    experiment closes, and one final before this rule keeps what it has."""
+    if not head:
+        return []
+    changed = set(_git(root, "diff-index", "--cached", "--no-renames", "--name-only", "-z", head, env=env).split("\0"))
+    out = []
+    for e in graph.exps.values():
+        if e.rel not in changed or e.fm.get("status") != "final" or e.fm.get("code"):
+            continue
+        before = _run(root, "show", f"{head}:{e.rel}")
+        try:
+            old = parse_frontmatter(before.stdout, e.rel)[0] if before.returncode == 0 else {}
+        except FrontmatterError:
+            old = {}
+        if old.get("status") != "final":
+            out.append(uncoded_message(e.rel, e.id))
+    return out
+
+
+def code_problems(exp) -> list[str]:
+    """An EXP's `code`: entries as the `code` command writes them, each label with each name once, or `n/a (why)`."""
+    entries, rel = [str(c).strip() for c in exp.fm.get("code") or []], exp.rel
+    if any(DATA_NA_RE.match(c) for c in entries):
+        return [f"{rel}: `code` is either `n/a (why)` or a list of entries, not both"] if len(entries) > 1 else []
+    out, seen = [], set()
+    for c in entries:
+        m = CODE_ENTRY_RE.match(c)
+        if m is None:
+            out.append(f"{rel}: `code` entry `{c}` is not `<label>: <name> <commit>[ from <commit> | from folder]` — "
+                       f"`code {exp.id} <repository or folder> …` writes the entries")
+        elif m.group(1, 2) in seen:
+            out.append(f"{rel}: `code` names {m.group(2)} twice under the label {m.group(1)}")
+        else:
+            seen.add(m.group(1, 2))
+    return out
 
 
 def manifest_rows(path: Path) -> list[dict[str, str]]:
@@ -3746,12 +3837,282 @@ def merge_manifest(rows: list[dict[str, str]], new: list[dict[str, str]]) -> lis
     return [r for r in rows if (r["path"], r["host"]) not in taken] + new
 
 
+def code_vault(root: Path, push: bool) -> str:
+    """Where `code` keeps its snapshots: `code_vault` from the settings, else the remote the ledger pushes to (its push
+    URL to push, its URL to fetch), else the ledger's own repository (a ledger kept on one machine)."""
+    url = str(settings(root).get("code_vault") or "").strip()
+    if not url:
+        up = _upstream(root)
+        url = _run(root, "remote", "get-url", *(["--push"] if push else []), up[0]).stdout.strip() if up else str(root)
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", url) and not _ssh_target(url) and not os.path.isabs(url):
+        url = str((root / url).resolve())  # a path, which the repositories pushing there would read from where they are
+    return url
+
+
+def code_name(path: Path, repository: bool) -> str:
+    """What a repository or folder goes by in `code` entries and in the vault: the last part of a repository's origin
+    without `.git` (git@host:group/Simulator.git → Simulator), else the folder's name, in letters, digits and . _ -."""
+    url = _run(path, "remote", "get-url", "origin").stdout.strip() if repository else ""
+    raw = re.sub(r"\.git$", "", re.split(r"[/:]", url.rstrip("/"))[-1]) if url else path.name
+    name = re.sub(r"\.{2,}", ".", re.sub(r"[^A-Za-z0-9._-]+", "-", raw)).strip("._-").removesuffix(".lock")
+    return name or "code"
+
+
+def code_names(targets: list[tuple[str, Path]]) -> list[str]:
+    """What each target goes by: code_name, or its folder's name when an earlier target goes by that already (a second
+    clone of one repository, beside it or inside it)."""
+    names: list[str] = []
+    for kind, path in targets:
+        name = code_name(path, kind == "repository")
+        names.append(code_name(path, False) if name in names else name)
+    return names
+
+
+def no_userinfo(text: str) -> str:
+    """`text` without the user and password of every URL in it, which a push URL may carry (https://user:token@host/…)."""
+    return re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]*@", r"\1", text)
+
+
+def _git_paths(where: list[str], *argv: str) -> list[str]:
+    """The NUL-separated paths a git command run as `git <where> <argv>` prints; a file name that is not UTF-8 is kept as
+    it is (surrogateescape)."""
+    r = subprocess.run(["git", *where, *argv], capture_output=True, encoding="utf-8", errors="surrogateescape")
+    if r.returncode:
+        raise CodeError(f"{where[1]}: git {argv[0]}: {(r.stderr or r.stdout).strip()[-300:]}")
+    return [p for p in r.stdout.split("\0") if p]
+
+
+def folder_git(path: Path, tmp: Path) -> list[str]:
+    """git's arguments that read the folder `path` as the work tree of a new, empty repository in `tmp`."""
+    repo = tmp / f"{path.name}-{os.urandom(4).hex()}.git"
+    _git(tmp, "init", "-q", "--bare", str(repo))
+    return ["-C", str(path), f"--git-dir={repo}", f"--work-tree={path}"]
+
+
+def code_targets(paths: list[Path], tmp: Path) -> list[tuple[str, Path]]:
+    """What the paths name: ("repository", the top of its work tree) for a path in a git work tree; ("folder", the
+    path) for a folder outside git, in a part its repository ignores, or a repository without a commit. Each is followed
+    by the repositories it holds: every submodule checked out under it and every repository inside it that git does
+    not track."""
+    out: list[tuple[str, Path]] = []
+    for p in (q.resolve() for q in paths):
+        r = _run(p if p.is_dir() else p.parent, "rev-parse", "--show-toplevel")
+        top = Path(r.stdout.strip()).resolve() if r.returncode == 0 else None
+        if top is not None and p != top:
+            rel = os.path.relpath(p, top) + ("/" if p.is_dir() else "")
+            if _run(top, "check-ignore", "-q", "--", rel).returncode == 0:
+                top = None  # a part its repository ignores: a folder of its own
+        if top is None and not p.is_dir():
+            raise CodeError(f"{p} is a file outside git — name its folder")
+        todo = [(top, True)] if top else [(p, False)]
+        while todo:  # what it is, then the repositories it holds
+            path, tree = todo.pop(0)
+            if tree and _run(path, "rev-parse", "-q", "--verify", "HEAD").returncode == 0:
+                out.append(("repository", path))
+                where = ["-C", str(path)]
+                inner = [path / e.split("\t", 1)[1] for e in _git_paths(where, "ls-files", "-s", "-z") if e.startswith("160000 ")]
+            else:
+                out.append(("folder", path))
+                where, inner = folder_git(path, tmp), []
+            inner += [path / rel.rstrip("/") for rel in _git_paths(where, "ls-files", "--others", "--exclude-standard", "-z") if rel.endswith("/")]
+            todo += [(sub, True) for sub in inner if (sub / ".git").exists()]
+    return list(dict.fromkeys(out))
+
+
+def capture(kind: str, path: Path, name: str, exp_id: str, label: str, tmp: Path) -> tuple[str, str | None, list[Path], list[str] | None]:
+    """The code at `path` as one commit, written to nothing but git's objects and a repository's own snapshot ref:
+    (that commit; what it was made from — a commit, "folder", or None for a commit of the repository itself; the files
+    over CODE_FILE_MAX left to the manifest; git's arguments to push it from, or None when its own remote has it)."""
+    if kind == "repository":
+        head, where = _git(path, "rev-parse", "HEAD").strip(), ["-C", str(path)]
+    else:
+        head, where = None, folder_git(path, tmp)
+    untracked =_git_paths(where, "ls-files", "--others", "--exclude-standard", "-z")  # by its own index: a staged file is tracked
+    env = {**os.environ, "GIT_INDEX_FILE": str(tmp / f"index-{os.urandom(4).hex()}")}  # the work tree's own index stays as it is
+
+    def git(*argv: str, stdin: str | None = None, extra: dict[str, str] | None = None) -> str:
+        r = subprocess.run(["git", *where, *argv], input=stdin, capture_output=True, encoding="utf-8", errors="surrogateescape",
+                           env={**env, **(extra or {})})
+        if r.returncode:
+            raise CodeError(f"{name} ({path}): git {argv[0]}: {(r.stderr or r.stdout).strip()[-400:]}")
+        return r.stdout
+
+    git("read-tree", *([head] if head else ["--empty"]))
+    nested = [rel for rel in untracked if rel.endswith("/")]  # a repository inside, which is an entry of its own
+    sizes = {rel: (path / rel).stat().st_size for rel in untracked
+             if not rel.endswith("/") and (path / rel).is_file() and not (path / rel).is_symlink()}
+    large = sorted(rel for rel, n in sizes.items() if n > CODE_FILE_MAX)
+    for rel in large:
+        try:
+            rel.encode("utf-8")
+        except UnicodeEncodeError:
+            raise CodeError(f"{name} ({path}): {rel.encode('utf-8', 'surrogateescape')!r} is over {CODE_FILE_MAX // 10**6} MB, "
+                            "and a manifest holds UTF-8 file names only") from None
+    small = Counter()
+    for rel, n in sizes.items():
+        if n <= CODE_FILE_MAX:
+            small[rel.split("/")[0]] += n
+    if sum(small.values()) > CODE_NEW_MAX:
+        raise CodeError(f"{name} ({path}): files git does not track add up to {sum(small.values()) / 1e6:.0f} MB, past "
+                        f"{CODE_NEW_MAX // 10**6} MB — " + ", ".join(f"{d} {n / 1e6:.0f} MB" for d, n in small.most_common(3))
+                        + "; build outputs go in .gitignore, data in `manifest`")
+    left = large + nested  # never hashed into git's objects, and out of the snapshot where HEAD has them too
+    if head and left:
+        git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul",
+            stdin="".join(f":(top,literal){rel}\0" for rel in left))
+    git("add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", stdin=":/\0" + "".join(f":(top,exclude,literal){rel}\0" for rel in left))
+    tree = git("write-tree").strip()
+    if kind == "repository" and tree == git("rev-parse", f"{head}^{{tree}}").strip() and git(
+            "for-each-ref", "--count=1", "--contains", head, "--format=%(refname)", "refs/remotes").strip():
+        return head, None, [path / rel for rel in large], None
+    snapshot = git("commit-tree", tree, stdin=f"{exp_id} {label}: {name}\n", extra=SNAPSHOT_ENV).strip()
+    if kind == "repository":
+        git("update-ref", f"{CODE_REF}/{exp_id}/{snapshot}", snapshot)  # one ref per snapshot, so none is ever moved
+    return snapshot, head or "folder", [path / rel for rel in large], where
+
+
+def push_snapshot(where: list[str], snapshot: str, vault: str, ref: str, name: str) -> None:
+    env = _network_env(Path(where[1]), vault)
+    try:
+        r = subprocess.run(["git", *where, "push", "--porcelain", vault, f"{snapshot}:{ref}"], capture_output=True,
+                           encoding="utf-8", errors="replace", env=env, timeout=CODE_PUSH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise CodeError(f"the code vault did not take {name} within {CODE_PUSH_TIMEOUT} s") from None
+    if r.returncode:
+        raise CodeError(no_userinfo(f"the code vault ({vault}) did not take {name}:\n  " + "\n  ".join(git_reply(r))))
+
+
+def merge_code(code: list, label: str, names, entries: list[str]) -> list[str]:
+    """`code` with `entries` in place of n/a and of the entries for the same label and names."""
+    return [c for c in code or [] if not DATA_NA_RE.match(str(c).strip())
+            and not any(str(c).startswith(f"{label}: {n} ") for n in names)] + entries
+
+
 def off_disk_attachments(root: Path, exp_id: str) -> bool:
     """Whether this partial clone leaves the attachments of `exp_id` off disk (MACHINES.md)."""
     try:
         return off_disk(f"{ATTACHMENTS}{exp_id}/", sparse_exps(root))
     except CommitError:
         return False  # a sparse checkout of another form, which a commit names
+
+
+def restore_code(root: Path, exp, name: str, label: str, dest: Path) -> int:
+    entries = [m for m in (CODE_ENTRY_RE.match(str(c).strip()) for c in exp.fm.get("code") or []) if m]
+    m = next((m for m in entries if m.group(1, 2) == (label, name)), None)
+    if m is None:
+        print(f"{exp.id} has no `code` entry `{label}: {name}` — it has " + (", ".join(f"`{e.group(1)}: {e.group(2)}`" for e in entries)
+              or "none"), file=sys.stderr)
+        return 2
+    commit, base = m.group(3), m.group(4)
+    if base is None:
+        print(f"{exp.id} ran {name} at {commit}, a commit of {name} itself: check it out in a clone of {name} (`git checkout {commit}`)")
+        return 0
+    if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
+        print(f"{dest} is not a new or empty folder", file=sys.stderr)
+        return 2
+    vault = code_vault(root, push=False)
+    with tempfile.TemporaryDirectory(prefix="labledger-restore-") as tmp:
+        repo = Path(tmp) / "vault.git"
+        _git(Path(tmp), "init", "-q", "--bare", str(repo))
+        where = ["git", "-C", tmp, f"--git-dir={repo}"]
+        try:
+            r = subprocess.run([*where, "fetch", "-q", vault, f"{CODE_REF}/{name}/{exp.id}/{commit}"], capture_output=True,
+                               encoding="utf-8", errors="replace", env=_network_env(Path(tmp), vault), timeout=CODE_PUSH_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(no_userinfo(f"the code vault ({vault}) did not answer within {CODE_PUSH_TIMEOUT} s"), file=sys.stderr)
+            return 1
+        got = subprocess.run([*where, "rev-parse", "-q", "--verify", "FETCH_HEAD"], capture_output=True, encoding="utf-8").stdout.strip()
+        if r.returncode or got != commit:
+            print(no_userinfo(f"the code vault ({vault}) does not hold {name} as {exp.id} {label} recorded it ({commit[:7]})"
+                              + (":\n  " + "\n  ".join(git_reply(r)) if r.returncode else f" — it holds {got[:7]}")), file=sys.stderr)
+            return 1
+        dest.mkdir(parents=True, exist_ok=True)
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        for argv in (("read-tree", commit), ("checkout-index", "-a")):
+            subprocess.run([*where, f"--work-tree={dest}", *argv], check=True, capture_output=True, env=env)
+    print(f"restored {name} as {exp.id} {label} ran it into {dest}" + (f": {base[:7]} with the run's uncommitted changes" if base != "folder" else ""))
+    return 0
+
+
+def cmd_code(args) -> int:
+    root = args.root
+    graph = load_graph(root)
+    exp = graph.exps.get(args.id)
+    if exp is None:
+        print(f"`code` takes an experiment, EXP-NNNN; `{args.id}` is unknown{did_you_mean(graph, args.id)}", file=sys.stderr)
+        return 2
+    if not CODE_LABEL_RE.match(args.label):
+        print(f"--label `{args.label}`: lowercase letters, digits and . _ - (run, before, after)", file=sys.stderr)
+        return 2
+    if args.restore:
+        if args.paths or args.to is None:
+            print("--restore <name> --to <new folder> restores one entry and takes no paths", file=sys.stderr)
+            return 2
+        return restore_code(root, exp, args.restore, args.label, Path(os.path.abspath(args.to)))
+    if not args.paths:
+        print(f"name the repositories or folders a run of {exp.id} uses: `code {exp.id} <repository or folder> …`", file=sys.stderr)
+        return 2
+    if exp.fm.get("status") != "in_flight":
+        print(f"{exp.id} is {exp.fm.get('status')} — `code` records the code a run is about to use, while its experiment "
+              "is in flight", file=sys.stderr)
+        return 2
+    if off_disk_attachments(root, exp.id):
+        print(f"{exp.id}'s attachments, where its manifest goes, are not in this partial clone — `attachments {exp.id}` "
+              "brings them in", file=sys.stderr)
+        return 2
+    missing = [p for p in args.paths if not Path(p).exists()]
+    if missing:
+        print(f"not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    problems = check_node(graph, "exp", exp)
+    if problems:  # before a snapshot is made: its entries are the only change, and they are made to validate
+        return refuse(problems)
+    host, vault = record_host(), code_vault(root, push=True)
+    with tempfile.TemporaryDirectory(prefix="labledger-code-") as tmp:
+        try:
+            targets = code_targets([Path(os.path.abspath(p)) for p in args.paths], Path(tmp))
+            names = code_names(targets)
+            twice = sorted(name for name, n in Counter(names).items() if n > 1)
+            if twice:
+                raise CodeError(f"{', '.join(str(p) for (_, p), name in zip(targets, names) if name in twice)} go by the name "
+                                f"{', '.join(twice)}: rename a folder, or record them in separate runs of `code` with different --label")
+            captured = [(name, path, *capture(kind, path, name, exp.id, args.label, Path(tmp))) for (kind, path), name in zip(targets, names)]
+        except (CodeError, CommitError) as exc:
+            print(f"nothing recorded — {exc}", file=sys.stderr)
+            return 2
+        entries = [f"{args.label}: {name} {commit}" + (f" from {base}" if base else "") for name, _, commit, base, _, _ in captured]
+        pushes = [(name, commit, where) for name, _, commit, _, _, where in captured if where is not None]
+        if pushes:
+            print(no_userinfo(f"pushing {len(pushes)} snapshot(s) to the code vault {vault}"))
+        try:
+            for name, commit, where in pushes:
+                push_snapshot(where, commit, vault, f"{CODE_REF}/{name}/{exp.id}/{commit}", name)
+        except CodeError as exc:
+            print(f"nothing recorded in {exp.id} — {exc}", file=sys.stderr)
+            return 1
+    for name, path, commit, base, _, _ in captured:
+        print(f"{name}: " + (f"{commit[:7]}, a commit one of its remote-tracking branches holds" if base is None else
+                             f"the folder {path} → snapshot {commit[:7]} in the code vault" if base == "folder" else
+                             f"{base[:7]} with uncommitted changes → snapshot {commit[:7]} in the code vault"))
+    graph = load_graph(root)  # read again: another session may have written the experiment while the snapshots went out
+    exp = graph.exps.get(args.id)
+    if exp is None or exp.fm.get("status") != "in_flight":
+        print(f"nothing recorded — {args.id} is {exp.fm.get('status') if exp else 'gone'} now", file=sys.stderr)
+        return 2
+    fm = {**exp.fm, "code": merge_code(exp.fm.get("code"), args.label, names, entries)}
+    problems = check_node(graph, "exp", replace(exp, fm=fm))
+    if problems:
+        return refuse(problems)
+    exp.path.write_text(formatted_text("exp", fm, exp.raw), encoding="utf-8")
+    rels = [exp.rel]
+    large = [f for *_, files, _ in captured for f in files]
+    if large:
+        manifest = root / ATTACHMENTS / exp.id / MANIFEST
+        write_manifest(manifest, merge_manifest(manifest_rows(manifest), manifest_entries(large, host)))
+        rels.append(f"{ATTACHMENTS}{exp.id}")
+        print(f"{len(large)} untracked file(s) over {CODE_FILE_MAX / 1e6:g} MB are data: their sizes and sha256 are in "
+              f"{ATTACHMENTS}{exp.id}/{MANIFEST}, the files stay where they are")
+    return written(args, rels, commit_subject(root, "exp", f"{exp.id} code {args.label}: {' '.join(names)}"))
 
 
 def cmd_manifest(args) -> int:
@@ -3915,7 +4276,8 @@ it when the ledger has a remote; the user set the ledger up that way, so record 
 
 | What happened | Command |
 |---|---|
-| a run produced numbers | `new exp "<title>"`; its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; `manifest EXP-NNNN <path> …` lists the files outside the ledger it read or wrote; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
+| a run is about to start | `new exp "<title>"` if it has none, then `code EXP-NNNN <repository or folder> …`: the code it runs, uncommitted changes included |
+| a run produced numbers | its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; `manifest EXP-NNNN <path> …` lists the files outside the ledger it read or wrote; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
 | something was decided | `new decision <slug> --text "…" --why "…" [--area <area>]` |
 | a defect, a surprise or an open question | `new issue <area> <slug> --symptom "…" [--path "…" --hypothesis "…"]` |
 | an investigation, review or design | `new inv <area> "<title>"`, then the body, then `set inv:<name> --status concluded --summary "…"` |
@@ -4462,7 +4824,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("--superseded-by", dest="superseded_by", help="exp: with status superseded")
     p.add_argument("--host", help="exp: the machine its local paths are on")
     p.add_argument("--model", help="exp"); p.add_argument("--commit", help="exp")
+    p.add_argument("--code", help='exp: "n/a (why)" when no code of a repository or folder ran (`code` records the code that did)')
     p.add_argument("--date", help="the date of `updated` and of a close decision (default: today; for records made late)")
+    p = sub.add_parser("code", help="record the code a run of an experiment uses, before the run: each repository's commit, or "
+                                    "a snapshot of its uncommitted work in the code vault; or restore one", description=CODE_HELP,
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.set_defaults(func=cmd_code)
+    p.add_argument("id", metavar="EXP-NNNN")
+    p.add_argument("paths", nargs="*", help="the repositories (with their submodules) and folders the run uses")
+    p.add_argument("--label", default="run", help="which run of the experiment this code is for: run (default), before, after, …")
+    p.add_argument("--restore", metavar="NAME", help="write the files of the entry NAME (with --label) into --to")
+    p.add_argument("--to", type=Path, help="with --restore: a new or empty folder")
     p = sub.add_parser("manifest", help="list by size and sha256 the files outside the ledger a run reads or writes; check them; "
                                         "follow them when they move", description=MANIFEST_HELP,
                        formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -4494,7 +4866,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("hook_args", nargs="*", help="what git passes (pre-push: the remote's name and URL)")
     args, extra = parser.parse_known_args(argv, argparse.Namespace(root=ROOT, no_commit=False, no_push=False, offline=False, json=False))
     if extra:  # argparse fills a positional once: paths after an option that follows the experiment are left over
-        rest = {"manifest": "items"}.get(args.cmd)
+        rest = {"code": "paths", "manifest": "items"}.get(args.cmd)
         if rest is None or any(e.startswith("-") for e in extra):
             parser.error(f"unrecognized arguments: {' '.join(extra)}")
         getattr(args, rest).extend(extra)
@@ -4519,8 +4891,8 @@ def unwritable(folder: Path) -> str | None:
 
 
 def reads_only(args) -> bool:
-    """The mode of a writing command that writes nothing in the ledger: `manifest --check`."""
-    return args.cmd == "manifest" and args.check
+    """The modes of a writing command that write nothing in the ledger: `code --restore`, `manifest --check`."""
+    return (args.cmd == "code" and bool(args.restore)) or (args.cmd == "manifest" and args.check)
 
 
 def unwritable_place(args) -> tuple[Path, str] | None:
@@ -4529,9 +4901,9 @@ def unwritable_place(args) -> tuple[Path, str] | None:
     check = getattr(args, "check", False)
     if reads_only(args):
         return None
-    places = [args.root] if args.cmd in ("new", "set", "resolve", "promote", "attachments", "manifest") or (
+    places = [args.root] if args.cmd in ("new", "set", "resolve", "promote", "attachments", "code", "manifest") or (
         args.cmd in ("render", "fmt") and not check) else []
-    if args.cmd in ("new", "set", "resolve", "promote", "attachments", "commit", "sync", "manifest"):
+    if args.cmd in ("new", "set", "resolve", "promote", "attachments", "commit", "sync", "code", "manifest"):
         with contextlib.suppress(CommitError):  # not a git clone: nothing is committed there
             places.append(git_dir(args.root))
     for place in places:
@@ -4552,7 +4924,7 @@ def run_command(args) -> int:
               "command where the ledger and its .git can be written", file=sys.stderr)
         return 2
     try:
-        if args.cmd in ("new", "set", "resolve", "promote", "commit", "manifest") and not reads_only(args):
+        if args.cmd in ("new", "set", "resolve", "promote", "commit", "code", "manifest") and not reads_only(args):
             record_today(args.root)  # the settings and the day it stamps, read before the command writes anything
         return args.func(args)
     except Refusal as exc:

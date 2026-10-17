@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -439,7 +440,8 @@ def test_set_closes_todo_and_writes_the_close_decision(repo: Path, capsys):
 
 def test_exp_state_claims_must_be_cited_in_state_files(repo: Path, capsys):
     write_state(repo)
-    assert run(repo, "set", "EXP-0001", "--status", "final", "--state", "health.md smoke row", "--data", "n/a (a smoke check)") == 0
+    assert run(repo, "set", "EXP-0001", "--status", "final", "--state", "health.md smoke row", "--data", "n/a (a smoke check)",
+               "--code", "n/a (a smoke check)") == 0
     assert run(repo, "validate") == 1
     assert "state/health.md never cites EXP-0001" in capsys.readouterr().out
     write_state(repo, "| llsim | pass | EXP-0001 |")
@@ -467,6 +469,7 @@ def test_a_final_experiment_names_the_tables_its_numbers_come_from(repo: Path, c
     """`data` names the tables (CSV, TSV, JSON) in the EXP's attachment folder that its numbers come from, each linked from
     the body, or says `n/a (why)`. A final experiment has it, and each table reads as one: a header, rows as wide as the
     header, one plain value per cell, a unit at the end of the name of every column of numbers."""
+    assert run(repo, "set", "EXP-0001", "--code", "n/a (no code ran)") == 0
     assert run(repo, "set", "EXP-0001", "--status", "final") == 2
     assert "a final experiment names the files its numbers come from" in capsys.readouterr().err
     good = "model,latency[ms],runs[1]\nresnet,12.5,3\nmobilenet,4.25,3\n"
@@ -511,7 +514,7 @@ def test_set_commits_an_experiment_with_its_tables_and_the_commit_reads_them(gre
     """`set` commits the EXP's attachment folder along, so the commit holds the tables `data` names, and the commit's
     check reads those tables as validate does."""
     table = exp_table(grepo, "model,latency[ms]\nresnet,12.5\n")
-    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "runs.csv: one row per model") == 0
+    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "runs.csv: one row per model", "--code", "n/a (no code ran)") == 0
     assert set(git(grepo, "show", "--name-only", "--format=", "HEAD").split()) == {
         "experiments/EXP-0001.md", "experiments/attachments/EXP-0001/runs.csv"}
     table.write_text("model,latency\nresnet,12.5\n", encoding="utf-8")
@@ -552,7 +555,7 @@ def test_state_tables_hold_one_current_value_per_item(repo: Path, capsys):
     row = "latency,resnet,12.5,ms,measured,EXP-0001,abc1234,2026-09-05,median of 3 runs\n"
     table.write_text(head + row, encoding="utf-8")
     assert run(repo, "validate") == 1 and "EXP-0001 is in_flight — a current value comes from a final experiment" in capsys.readouterr().out
-    assert run(repo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)") == 0
+    assert run(repo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)", "--code", "n/a (no code ran)") == 0
     assert run(repo, "validate") == 1 and "EXP-0001's `state` does not name latency.csv" in capsys.readouterr().out
     assert run(repo, "set", "EXP-0001", "--state", "latency.csv") == 0
     assert run(repo, "validate") == 0
@@ -648,7 +651,7 @@ def test_write_commands_refuse_records_that_would_not_validate(repo: Path, capsy
     assert run(repo, "validate") == 0
     assert run(repo, "set", "EXP-0001", "--summary", "x" * ll.SUMMARY_MAX) == 0, "a summary may run longer than a status note"
     assert set(ll.SET_OPTIONS) == {"status", "note", "priority", "evidence", "affects", "summary", "state", "data", "superseded_by",
-                                   "host", "model", "commit"}
+                                   "host", "model", "commit", "code"}
 
 
 def test_a_refusal_says_how_to_fix_it(repo: Path, capsys):
@@ -1016,7 +1019,7 @@ def test_commit_carries_only_the_named_records(grepo: Path, tmp_path: Path, caps
 def test_set_state_commits_the_tables_it_names(grepo: Path, capsys):
     """A state row edited by hand goes into the commit of the experiment that names its table, which then validates on
     its own: `set EXP-NNNN --state` commits the tables it names with the experiment, as it does the attachment folder."""
-    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)") == 0
+    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)", "--code", "n/a (no code ran)") == 0
     head = git(grepo, "rev-parse", "HEAD")
     assert run(grepo, "set", "EXP-0001", "--state", "latency.csv") == 2, "a table that is not there yet"
     assert "write the table with its row first" in capsys.readouterr().err and git(grepo, "rev-parse", "HEAD") == head
@@ -1565,7 +1568,7 @@ def test_a_partial_clone_leaves_the_attachments_upstream_until_asked(hooked: Pat
     (att / "big.bin").write_bytes(big("a"))
     (att / "small.txt").write_text("small\n", encoding="utf-8")
     exp_table(a, "run[id],cycles[1]\n1,100\n")
-    assert run(a, "set", "EXP-0001", "--status", "final", "--data", "runs.csv: one row per run") == 0
+    assert run(a, "set", "EXP-0001", "--status", "final", "--data", "runs.csv: one row per run", "--code", "n/a (no code ran)") == 0
 
     def blob(path: str) -> str:
         return git(origin, "rev-parse", f"main:{path}").strip()
@@ -1984,7 +1987,225 @@ def test_an_update_syncs_the_ledger_first(tmp_path: Path, monkeypatch):
     assert git(remote, "rev-parse", "main") == git(ledger, "rev-parse", "HEAD"), "pushed on top of the other machine's work"
 
 
-# ───────────────────────────── the files a run used ─────────────────────────────
+# ───────────────────────────── the code and the files a run used ─────────────────────────────
+
+def code_repo(tmp_path: Path, name: str, path: str | None = None) -> Path:
+    """A repository of code with a remote of its own (`<name>.git`) that has its first commit."""
+    remote = tmp_path / f"{name}.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    work = tmp_path / (path or name)
+    git(tmp_path, "clone", "-q", str(remote), str(work))
+    git(work, "config", "user.name", "t")
+    git(work, "config", "user.email", "t@example.org")
+    (work / "sim.py").write_text("print(1)\n", encoding="utf-8")
+    (work / ".gitignore").write_text("build/\n", encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "-m", "base")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    return work
+
+
+def snapshot_refs(repo: Path) -> list[str]:
+    return git(repo, "for-each-ref", "--format=%(refname)", "refs/labledger/code").split()
+
+
+def test_code_keeps_a_run_s_uncommitted_work_in_the_vault_and_gives_it_back(grepo: Path, origin: Path, tmp_path: Path,
+                                                                            monkeypatch, capsys):
+    """Before a run, `code` records the code it uses. A repository whose work tree holds changes no commit has becomes one
+    snapshot commit of exactly its files, the untracked ones in and the ignored ones out, kept in the code vault (here
+    the ledger's remote) while the work tree, its index and its branches stay as they were; a file over the size limit
+    is data, which the manifest lists and git never stores; a folder outside git is kept the same way; `--restore`
+    gives the files back."""
+    monkeypatch.setattr(ll, "CODE_FILE_MAX", 1000)
+    work = code_repo(tmp_path, "simulator")
+    (work / "sim.py").write_text("print(2)\n", encoding="utf-8")
+    (work / "staged.py").write_text("x = 1\n", encoding="utf-8")
+    git(work, "add", "staged.py")
+    (work / "new.txt").write_text("new\n", encoding="utf-8")
+    (work / "build").mkdir()
+    (work / "build" / "out.o").write_text("junk\n", encoding="utf-8")
+    (work / "big.bin").write_bytes(b"x" * 2000)
+    folder = tmp_path / "_analysis"
+    folder.mkdir()
+    (folder / "calc.py").write_text("y = 2\n", encoding="utf-8")
+    state = lambda: (git(work, "status", "--porcelain"), git(work, "ls-files", "-s"), git(work, "for-each-ref", "refs/heads"))
+    before = state()
+    assert run(grepo, "code", "EXP-0001", str(work / "sim.py"), str(folder)) == 0, "a file in a repository names the repository"
+    assert state() == before, "the work tree, its index and its branches are as they were"
+    head = git(work, "rev-parse", "HEAD").strip()
+    code = ll.load_graph(grepo).exps["EXP-0001"].fm["code"]
+    m = re.fullmatch(rf"run: simulator ([0-9a-f]{{40}}) from {head}", code[0])
+    assert m and re.fullmatch(r"run: analysis [0-9a-f]{40} from folder", code[1]), code
+    snapshot = m.group(1)
+    assert f"refs/labledger/code/simulator/EXP-0001/{snapshot}" in snapshot_refs(origin)
+    assert sorted(git(work, "ls-tree", "-r", "--name-only", snapshot).split()) == [".gitignore", "new.txt", "sim.py", "staged.py"]
+    blob = git(work, "hash-object", "big.bin").strip()
+    assert subprocess.run(["git", "-C", str(work), "cat-file", "-e", blob]).returncode != 0, "data is never hashed into git"
+    assert git(origin, "rev-parse", "main") == git(grepo, "rev-parse", "HEAD"), "the record is committed and pushed"
+    rows = ll.manifest_rows(grepo / "experiments" / "attachments" / "EXP-0001" / "manifest.tsv")
+    assert [(r["path"], r["host"], r["bytes[B]"], r["sha256"]) for r in rows] == [
+        (str(work / "big.bin"), "test-server", "2000", hashlib.sha256(b"x" * 2000).hexdigest())]
+    assert run(grepo, "code", "EXP-0001", str(work)) == 0
+    assert sorted(ll.load_graph(grepo).exps["EXP-0001"].fm["code"]) == sorted(code), "the same files for the same run: the same snapshot"
+    monkeypatch.chdir(tmp_path)
+    assert run(grepo, "code", "EXP-0001", "--restore", "simulator", "--to", "restored") == 0, "--to relative to here"
+    assert sorted(p.name for p in (tmp_path / "restored").iterdir()) == [".gitignore", "new.txt", "sim.py", "staged.py"]
+    assert (tmp_path / "restored" / "sim.py").read_text(encoding="utf-8") == "print(2)\n"
+    assert run(grepo, "code", "EXP-0001", "--restore", "analysis", "--to", str(tmp_path / "calc")) == 0
+    assert (tmp_path / "calc" / "calc.py").read_text(encoding="utf-8") == "y = 2\n"
+    assert run(grepo, "validate") == 0
+    git(grepo, "config", "remote.origin.pushurl", str(tmp_path / "push.git"))
+    assert (ll.code_vault(grepo, push=True), ll.code_vault(grepo, push=False)) == (str(tmp_path / "push.git"), str(origin))
+
+
+def test_a_snapshot_holds_the_work_tree_whatever_git_s_index_says_of_it(grepo: Path, origin: Path, tmp_path: Path, monkeypatch):
+    """A snapshot is the files of the work tree: a change hidden with assume-unchanged is in it, and so is a staged new
+    file over the size limit, which git tracks; one over it that the index stopped tracking is data, out of the
+    snapshot though HEAD has it; a file named like a pattern is left out by its own name only; a repository inside the
+    work tree that git does not track is an entry of its own."""
+    monkeypatch.setattr(ll, "CODE_FILE_MAX", 1000)
+    work = code_repo(tmp_path, "simulator")
+    (work / "table.bin").write_bytes(b"a" * 2000)
+    git(work, "add", "table.bin")
+    git(work, "commit", "-q", "-m", "a table")
+    (work / "sim.py").write_text("print(2)\n", encoding="utf-8")
+    git(work, "update-index", "--assume-unchanged", "sim.py")
+    assert git(work, "status", "--porcelain") == ""
+    git(work, "rm", "-q", "--cached", "table.bin")
+    (work / "table.bin").write_bytes(b"b" * 2000)
+    (work / "staged.bin").write_bytes(b"s" * 2000)
+    git(work, "add", "staged.bin")
+    (work / "w[1].bin").write_bytes(b"w" * 2000)
+    (work / "w1.bin").write_text("small\n", encoding="utf-8")
+    vendor = work / "vendor"
+    vendor.mkdir()
+    git(vendor, "init", "-q", "-b", "main")
+    git(vendor, "config", "user.name", "t")
+    git(vendor, "config", "user.email", "t@example.org")
+    (vendor / "lib.c").write_text("int x;\n", encoding="utf-8")
+    git(vendor, "add", "-A")
+    git(vendor, "commit", "-q", "-m", "vendor")
+    assert run(grepo, "code", "EXP-0001", str(work)) == 0
+    code = ll.load_graph(grepo).exps["EXP-0001"].fm["code"]
+    snapshot = re.fullmatch(r"run: simulator ([0-9a-f]{40}) from [0-9a-f]{40}", code[0])
+    assert snapshot and re.fullmatch(r"run: vendor [0-9a-f]{40} from [0-9a-f]{40}", code[1]), code
+    assert sorted(git(work, "ls-tree", "-r", "--name-only", snapshot.group(1)).split()) == [".gitignore", "sim.py", "staged.bin", "w1.bin"]
+    assert git(work, "show", f"{snapshot.group(1)}:sim.py") == "print(2)\n"
+    rows = ll.manifest_rows(grepo / "experiments" / "attachments" / "EXP-0001" / "manifest.tsv")
+    assert [(Path(r["path"]).name, r["sha256"]) for r in rows] == [("table.bin", hashlib.sha256(b"b" * 2000).hexdigest()),
+                                                                 ("w[1].bin", hashlib.sha256(b"w" * 2000).hexdigest())]
+
+
+def test_code_names_a_clean_pushed_commit_and_each_submodule(grepo: Path, origin: Path, tmp_path: Path, capsys):
+    """A repository clean at a commit its remote has is that commit, and nothing goes to the vault. Every submodule
+    checked out under it is an entry of its own, a snapshot once its work tree changes, while the repository above it
+    stays its commit; a second clone of the repository inside it goes by its folder's name."""
+    code_repo(tmp_path, "library")
+    work = code_repo(tmp_path, "simulator")
+    git(work, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(tmp_path / "library.git"), "my lib")
+    git(work, "commit", "-q", "-m", "add lib")
+    git(work, "push", "-q", "origin", "HEAD:main")
+    git(tmp_path, "clone", "-q", str(tmp_path / "simulator.git"), str(work / "baseline"))
+    head, lib = git(work, "rev-parse", "HEAD").strip(), git(work / "my lib", "rev-parse", "HEAD").strip()
+    assert run(grepo, "code", "EXP-0001", str(work)) == 0
+    assert ll.load_graph(grepo).exps["EXP-0001"].fm["code"] == [f"run: simulator {head}", f"run: library {lib}",
+                                                                f"run: baseline {head}"]
+    assert snapshot_refs(origin) == []
+    capsys.readouterr()
+    assert run(grepo, "code", "EXP-0001", "--restore", "simulator", "--to", str(tmp_path / "x")) == 0
+    assert f"a commit of simulator itself: check it out in a clone of simulator (`git checkout {head}`)" in capsys.readouterr().out
+    (work / "my lib" / "sim.py").write_text("print(3)\n", encoding="utf-8")
+    assert run(grepo, "code", "EXP-0001", "--label", "after", str(work)) == 0
+    after = [c for c in ll.load_graph(grepo).exps["EXP-0001"].fm["code"] if c.startswith("after: ")]
+    assert after[0] == f"after: simulator {head}" and re.fullmatch(rf"after: library [0-9a-f]{{40}} from {lib}", after[1]), after
+
+
+def test_code_that_fails_or_meets_another_session_loses_nothing(grepo: Path, origin: Path, tmp_path: Path, capsys):
+    """A run of `code` whose push fails records nothing and moves no snapshot ref, so what the experiment recorded stays
+    restorable; what another session writes into the experiment while the snapshots go out stays as well."""
+    work, lib = code_repo(tmp_path, "simulator"), code_repo(tmp_path, "library")
+    (work / "sim.py").write_text("print(2)\n", encoding="utf-8")
+    (lib / "sim.py").write_text("print(20)\n", encoding="utf-8")
+    assert run(grepo, "code", "EXP-0001", str(work), str(lib)) == 0
+    recorded = ll.load_graph(grepo).exps["EXP-0001"].fm["code"]
+    (work / "sim.py").write_text("print(3)\n", encoding="utf-8")
+    (lib / "sim.py").write_text("print(30)\n", encoding="utf-8")
+    hook = lib / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    capsys.readouterr()
+    assert run(grepo, "code", "EXP-0001", str(work), str(lib)) == 1 and "nothing recorded" in capsys.readouterr().err
+    assert ll.load_graph(grepo).exps["EXP-0001"].fm["code"] == recorded
+    assert run(grepo, "code", "EXP-0001", "--restore", "simulator", "--to", str(tmp_path / "back")) == 0
+    assert (tmp_path / "back" / "sim.py").read_text(encoding="utf-8") == "print(2)\n"
+    exp = grepo / "experiments" / "EXP-0001.md"
+    hook.write_text(f"#!/bin/sh\nprintf 'A note another session wrote.\\n' >> '{exp}'\n", encoding="utf-8")
+    assert run(grepo, "code", "EXP-0001", str(lib)) == 0
+    assert "A note another session wrote." in exp.read_text(encoding="utf-8")
+    assert "A note another session wrote." in git(grepo, "show", "HEAD:experiments/EXP-0001.md")
+    (lib / "sim.py").write_text("print(40)\n", encoding="utf-8")
+    withdrawn = tmp_path / "withdrawn.md"
+    withdrawn.write_text(exp.read_text(encoding="utf-8").replace("status: in_flight", "status: withdrawn"), encoding="utf-8")
+    hook.write_text(f"#!/bin/sh\ncp '{withdrawn}' '{exp}'\n", encoding="utf-8")
+    recorded = ll.load_graph(grepo).exps["EXP-0001"].fm["code"]
+    capsys.readouterr()
+    assert run(grepo, "code", "EXP-0001", str(lib)) == 2 and "nothing recorded — EXP-0001 is withdrawn now" in capsys.readouterr().err
+    assert ll.load_graph(grepo).exps["EXP-0001"].fm["code"] == recorded
+
+
+def test_code_stops_on_what_it_cannot_record_and_records_nothing(grepo: Path, origin: Path, tmp_path: Path, monkeypatch, capsys):
+    """`code` records the code of an experiment in flight; untracked files that add up past the limit (build outputs,
+    most often) stop it, as do a record that would not validate, before any snapshot leaves, and a vault that does not
+    take the snapshot, whose password `code` never prints; the experiment is left as it was."""
+    monkeypatch.setattr(ll, "CODE_NEW_MAX", 100)
+    work = code_repo(tmp_path, "simulator")
+    exp = grepo / "experiments" / "EXP-0001.md"
+    before = exp.read_bytes()
+    (work / "out").mkdir()
+    for n in range(3):
+        (work / "out" / f"{n}.txt").write_text("y" * 60, encoding="utf-8")
+    assert run(grepo, "code", "EXP-0001", str(work)) == 2
+    assert "files git does not track add up to" in capsys.readouterr().err and exp.read_bytes() == before
+    shutil.rmtree(work / "out")
+    (work / "sim.py").write_text("print(2)\n", encoding="utf-8")
+    exp.write_text(before.decode("utf-8").replace('"LAB-001: ', '"LAB-999: '), encoding="utf-8")
+    assert run(grepo, "code", "EXP-0001", str(work)) == 2
+    assert "affects unknown LAB-999" in capsys.readouterr().err and snapshot_refs(origin) == snapshot_refs(work) == []
+    exp.write_bytes(before)
+    (grepo / "labledger.yml").write_text(f"code_vault: file://user:s3cret@localhost{tmp_path / 'no-such-vault.git'}\n", encoding="utf-8")
+    git(grepo, "add", "labledger.yml")
+    git(grepo, "commit", "-q", "-m", "a vault that is not there")
+    assert run(grepo, "code", "EXP-0001", str(work)) == 1
+    out = capsys.readouterr()
+    assert "did not take simulator" in out.err and "the code vault file://localhost/" in out.out and exp.read_bytes() == before
+    assert "s3cret" not in out.out + out.err
+    assert run(grepo, "code", "EXP-0002", str(work)) == 2 and "unknown" in capsys.readouterr().err
+    assert run(grepo, "set", "EXP-0001", "--status", "withdrawn") == 0
+    assert run(grepo, "code", "EXP-0001", str(work)) == 2 and "while its experiment is in flight" in capsys.readouterr().err
+
+
+def test_an_experiment_turns_final_with_the_code_its_runs_used(grepo: Path, capsys):
+    """A write or a commit that makes an experiment final needs its `code`, the entries `code` writes or `n/a (why)`,
+    which `set --code` takes alone. An experiment final before the rule keeps what it has."""
+    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "n/a (numbers in the body)") == 2
+    assert "turns final without `code`" in capsys.readouterr().err
+    assert run(grepo, "set", "EXP-0001", "--code", "a223f70") == 2 and '--code takes "n/a (why)" only' in capsys.readouterr().err
+    exp = grepo / "experiments" / "EXP-0001.md"
+    before = exp.read_text(encoding="utf-8")
+    exp.write_text(before.replace("status: in_flight", "status: final").replace("state: n/a", 'state: n/a\ndata:\n  - "n/a (x)"'),
+                   encoding="utf-8")
+    assert run(grepo, "validate") == 0, "the rule is the commit's: a final experiment without code still validates"
+    assert run(grepo, "commit", "-m", "x", "EXP-0001") == 1 and "turns final without `code`" in capsys.readouterr().err
+    git(grepo, "commit", "-q", "-am", "made final by a tool before the rule")
+    assert run(grepo, "set", "EXP-0001", "--summary", "edited later") == 0, "a final experiment keeps what it has"
+    exp.write_text(before, encoding="utf-8")
+    git(grepo, "commit", "-q", "-am", "in flight again")
+    assert run(grepo, "set", "EXP-0001", "--status", "final", "--data", "n/a (x)", "--code", "n/a (the body's arithmetic)") == 0
+    assert ll.load_graph(grepo).exps["EXP-0001"].fm["code"] == ["n/a (the body's arithmetic)"]
+    exp.write_text(exp.read_text(encoding="utf-8").replace('  - "n/a (the body\'s arithmetic)"',
+                                                           '  - "run: sim a223f70"'), encoding="utf-8")
+    assert run(grepo, "validate") == 1 and "`code` entry `run: sim a223f70` is not" in capsys.readouterr().out
+
 
 def test_manifest_lists_checks_and_follows_the_files_a_run_used(grepo: Path, tmp_path: Path, monkeypatch, capsys):
     """`manifest` writes the size and sha256 of files outside the ledger into the EXP's manifest.tsv and commits that
@@ -2047,8 +2268,26 @@ def test_a_partial_clone_neither_checks_nor_rewrites_manifests_it_lacks(grepo: P
     b = partial_server(origin, tmp_path / "b")
     capsys.readouterr()
     for argv in (("manifest", "--check", "EXP-0001"), ("manifest", "EXP-0001", str(data)),
-                 ("manifest", "--move", str(tmp_path), str(tmp_path / "x"))):
+                 ("manifest", "--move", str(tmp_path), str(tmp_path / "x")), ("code", "EXP-0001", str(tmp_path))):
         assert run(b, *argv) == 2, argv
         assert "not in this partial clone" in capsys.readouterr().err, argv
     assert run(b, "manifest", "--check") == 1 and "not checked: the manifests of EXP-0001" in capsys.readouterr().out
 
+
+def test_a_folder_its_repository_ignores_is_kept_as_a_folder_of_its_own(grepo: Path, origin: Path, tmp_path: Path):
+    """A work folder in the part of a repository git ignores (a run's scripts beside its outputs) is not that
+    repository's code: `code` keeps it as a folder, named through a link as well, and a repository in it as an entry
+    of its own."""
+    work = code_repo(tmp_path, "simulator")
+    results = work / "build" / "results"
+    results.mkdir(parents=True)
+    (results / "plot.py").write_text("plot()\n", encoding="utf-8")
+    code_repo(tmp_path, "library")
+    git(tmp_path, "clone", "-q", str(tmp_path / "library.git"), str(results / "lib"))
+    (results / "lib" / "sim.py").write_text("print(5)\n", encoding="utf-8")
+    (tmp_path / "link").symlink_to(work)
+    assert run(grepo, "code", "EXP-0001", str(tmp_path / "link" / "build" / "results")) == 0
+    folder, lib = ll.load_graph(grepo).exps["EXP-0001"].fm["code"]
+    snapshot = re.fullmatch(r"run: results ([0-9a-f]{40}) from folder", folder)
+    assert snapshot and re.fullmatch(r"run: library [0-9a-f]{40} from [0-9a-f]{40}", lib), (folder, lib)
+    assert git(origin, "ls-tree", "-r", "--name-only", snapshot.group(1)).split() == ["plot.py"]

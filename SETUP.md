@@ -46,7 +46,11 @@ agent running it asks them, then runs it again with the answers.
   zone the write commands stamp today in (default: each machine's own zone; MACHINES.md, Machine names and dates).
   `commit_prefix` is the first word of the commit messages write commands make (default: the ledger's name,
   `labledger`), one word of `A-Z a-z 0-9 . _ -`. `language` names the language the records are written in, which the
-  skill asks agents to write in (default: none named; setup reads it when it writes the skill).
+  skill asks agents to write in (default: none named; setup reads it when it writes the skill). `code_vault` is the git
+  URL or path of the repository `code` keeps its snapshots in (default: the remote the ledger pushes to, else the
+  ledger itself). *Guidance:* name one when the ledger is shared with people who may not see all the code its
+  experiments ran, a repository only those who may see the code can read. A snapshot sits in the vault as
+  `refs/labledger/code/<name>/EXP-NNNN/<commit>`; `git push <vault> :<that ref>` deletes it.
 - **`templates/<kind>.md`** replaces the body a new record of that kind starts with: `todo`, `exp`, `arc`, `inv` or
   `area`.
 - **`templates/labels.yml`** replaces the words commands write into records: `symptom path hypothesis blocking` (`new

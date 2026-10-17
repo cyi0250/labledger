@@ -5,10 +5,10 @@ per record, kept by the people and the AI agents who do the work. `scripts/lable
 them and builds the tables. This file holds the rules every session uses. Two more hold what only some sessions meet,
 each read when its case comes up: [MACHINES.md](MACHINES.md) when the ledger is kept on more than one machine
 (numbers, a `sync` that stopped, partial clones, SSH), and [SETUP.md](SETUP.md) to set up the ledger or its skill, to
-bring in tables made before it, to change its settings (`labledger.yml`: time zone, commit prefix, language) or
-templates, or to change the tool or take a newer version of it. Every rule in the three files is checked by the tool:
-by `validate`, by a command before it writes, or when a commit is made or pushed. What the tool cannot check is
-marked *guidance* and says why it is there. A check sees the form of a record, not its meaning: that a note is
+bring in tables made before it, to change its settings (`labledger.yml`: time zone, commit prefix, language, code
+vault) or templates, or to change the tool or take a newer version of it. Every rule in the three files is checked by
+the tool: by `validate`, by a command before it writes, or when a commit is made or pushed. What the tool cannot check
+is marked *guidance* and says why it is there. A check sees the form of a record, not its meaning: that a note is
 filled, not that it says why.
 
 **Every write command commits what it wrote, and pushes it when the branch tracks a remote.** Nobody is asked before a
@@ -39,7 +39,8 @@ record is committed (see [Commits](#commits)).
 - **Statuses**: a `dropped` TODO and a `parked` arc say why; a closed TODO has its close decision, which `set` writes.
 - **Numbers**: a final experiment's `data` tables exist, are linked from its body and read as tables; state tables have
   their columns and cite final experiments.
-- **Files**: an experiment's `manifest.tsv` holds the columns `manifest` writes.
+- **Code and files**: an experiment's `code` holds the entries `code` writes, its `manifest.tsv` the columns `manifest`
+  writes.
 
 How the records fit together. The tool computes what this describes; the advice in it is *guidance*:
 
@@ -98,13 +99,27 @@ A reader checks a number by opening the table it was computed from.
 - *Guidance:* write a current value once, in `state/`, and cite it elsewhere by its EXP. validate cannot see a copy
   of a value in a TODO or a decision.
 
-## The files a run used
+## The code and the files a run used
 
-A reader runs an experiment again from the files it read.
+A reader runs an experiment again from the code it ran and the files it read.
 
+- **Before each run, `code EXP-NNNN <repository or folder> …` records its code** in the experiment's `code`. A
+  repository, each submodule checked out under it and each repository inside it that git does not track is its commit
+  when its work tree holds exactly that commit and a remote-tracking branch holds the commit; otherwise a snapshot:
+  one commit of exactly the files of the work tree (untracked ones in, ignored ones out), kept in the code vault and
+  named with the commit it was made from. A folder outside git, or in a part its repository ignores, is kept the same
+  way, and each repository in it is an entry of its own. Work trees, their indexes and branches stay as they are.
+  `--label before` and `--label after` keep the code of two runs apart; `code EXP-NNNN --restore <name> --to
+  <folder>` gives the files back.
+- **The code vault** is the remote the ledger pushes to, or the ledger itself when it has none; clones of the ledger
+  never fetch the snapshots. The code reaches everyone who can read the vault, and no one else: a ledger shared with
+  people who may not see all the code names another vault, `code_vault` in `labledger.yml` ([SETUP.md](SETUP.md)).
+- **A commit that makes an experiment final needs its `code`**: the entries `code` wrote, or `set EXP-NNNN --code "n/a
+  (why)"` when no code of a repository or folder ran. An experiment that was final before this rule keeps what it has.
 - **`manifest EXP-NNNN <path> …` lists the files outside the ledger a run read or wrote**: path, machine, size and
-  sha256, in `experiments/attachments/EXP-NNNN/manifest.tsv`. `manifest --check` finds them changed or gone; when
-  files move, `manifest --move <old> <new>` points the rows at their new place.
+  sha256, in `experiments/attachments/EXP-NNNN/manifest.tsv`, where `code` also lists the untracked files over 1 MB,
+  which are data. `manifest --check` finds them changed or gone; when files move, `manifest --move <old> <new>`
+  points the rows at their new place.
 
 ## How to work
 
@@ -117,7 +132,8 @@ python3 scripts/labledger.py show SIM-012         # a record, its links with the
 python3 scripts/labledger.py find dma latency --kind todo exp   # records holding every keyword (--body: bodies too)
 
 python3 scripts/labledger.py new issue sim dma-stalls --symptom "…" --path "dma.c:151" --hypothesis "…"
-python3 scripts/labledger.py new exp "DMA latency under load" --model "sim v2" --commit 347d29d --affects "SIM-013: first numbers"
+python3 scripts/labledger.py new exp "DMA latency under load" --model "sim v2" --affects "SIM-013: first numbers"
+python3 scripts/labledger.py code EXP-0042 ../simulator   # before the run: the code it runs, uncommitted work included
 python3 scripts/labledger.py set EXP-0042 --status final --summary "…" --data "latency.csv: one row per load level" --state latency.csv
 python3 scripts/labledger.py validate             # green before the turn ends
 ```
@@ -151,7 +167,8 @@ validate is green before the turn ends, and hand edits are committed in the turn
 | an investigation, review, audit or design | `new inv <area> "<title>"`, the body, then `set inv:<name> --status concluded --summary … --affects …` | `areas/<area>/<slug>-<date>.md` |
 | an issue was settled | `resolve issue <slug> --by "<EXP, commit, inv:, document>"` | the issue: `resolved` and one line |
 | something is to be done | `new todo <area> "<title>" --from …`; for an issue also `promote issue <slug> --to <ID>` | `areas/<area>/<ID>.md` |
-| a run produced numbers | `new exp "<title>"`; `manifest EXP-NNNN <path> …` for the files outside the ledger; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
+| a run is about to start | `new exp "<title>"` once, then `code EXP-NNNN <repository or folder> …` | its `code`; snapshots in the code vault |
+| a run produced numbers | its tables in the attachments; `manifest EXP-NNNN <path> …` for the files outside the ledger; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
 | a status was judged, or work finished | `set <ID> --status … --note … [--evidence EXP-NNNN]` | the head; a close decision for done or dropped |
 | work spanning several TODOs began | `new arc "<title>" --members … --exps … --areas …` | `arcs/ARC-NNN.md` |
 | something was decided | `new decision <slug> --text … [--area <area>] [--context --why]` | `areas/<area>/decisions/` or `decisions/` |
