@@ -197,7 +197,7 @@ LABELS = {  # the words the write commands put into record bodies
     "in_progress": "(in progress)",  # a new EXP's summary
 }
 NAME = "labledger"  # what this ledger is called: its tool, settings, skill, commit messages, variables and refs carry it
-VERSION = "0.1.1"  # the tool's version; a ledger's copy keeps the version it was taken from
+VERSION = "0.2.0"  # the tool's version; a ledger's copy keeps the version it was taken from
 SETTINGS_FILE = "labledger.yml"  # the ledger's settings: `key: value` lines, every key optional
 SETTINGS_KEYS = ("timezone", "commit_prefix", "language", "code_vault")
 COMMIT_PREFIX = NAME  # a write command's commit message reads `<commit_prefix>(<area>): <what>`
