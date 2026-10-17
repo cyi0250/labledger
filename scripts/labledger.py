@@ -1819,8 +1819,8 @@ def cmd_review(args) -> int:
         lines.append(f"- {t.id} · {t.fm['status']} · {t.fm['priority']} · updated {t.fm['updated']} — {t.fm['title']}")
     word = graph.labels["resolved"]  # the word `resolve issue` writes, in the ledger's language
     self_resolved = [i for i in graph.issues if i.is_open and word.lower() in i.text.lower()]
-    lines += ["", f"## 3. Open issues whose body holds the word `{word}` — {len(self_resolved)} "
-              f"(`resolve issue <slug> --by …` when it is settled)", ""]
+    lines += ["", f"## 3. Open issues whose body holds the word `{word}` — {len(self_resolved)} (judge each, since the "
+              f"word also stands inside others, such as its negation; `resolve issue <slug> --by …` when it is settled)", ""]
     for i in self_resolved:
         lines.append(f"- {i.date} `{i.slug}` ({i.file})")
     arc_stale = []

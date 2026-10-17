@@ -256,6 +256,7 @@ def test_review_queues_what_has_waited_too_long(repo: Path, capsys):
                  "- `seed-issue-lab` — LAB-002 done",
                  f"- {TODAY} `went-away` (areas/lab/issues/went-away.md)"):
         assert line in out, line
+    assert "(judge each, since the word also stands inside others" in out, "`unresolved` holds `resolved`"
     assert "`inv:review-2026-09-03`" not in out, "a concluded investigation waits for nothing"
     assert run(repo, "review", "--today", TODAY) == 0
     out = capsys.readouterr().out
