@@ -1863,6 +1863,26 @@ def test_an_update_waits_for_settings_its_ledger_can_commit_with(tmp_path: Path,
 
 
 @pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
+@pytest.mark.parametrize("first, carry", [("labnotes: start the ledger", "git merge-file AGENTS.md"),
+                                          ("labnotes: brought over from another tool", "diff -u AGENTS.md")])
+def test_a_rulebook_file_the_ledger_kept_is_merged_from_what_setup_wrote(tmp_path: Path, monkeypatch, first: str, carry: str):
+    """A ledger whose first commit carries no marks (one setup made before 0.1.0, or one another tool made) goes by that
+    commit for a file no mark names. When setup made it, what setup wrote there is the base every update merges from, the
+    first update and the ones after it; otherwise there is none, and each update prints a diff to carry over by hand."""
+    ledger, source = made_by_setup(tmp_path, monkeypatch)
+    root = git(ledger, "commit-tree", git(ledger, "rev-parse", "HEAD^{tree}").strip(), "-m", first).strip()
+    git(ledger, "update-ref", "refs/heads/main", root)  # the same files, the commit without the marks
+    rules = ledger / "AGENTS.md"
+    rules.write_text(rules.read_text(encoding="utf-8").replace("# Ledger rules\n", "# Ledger rules\n\nOur own rule.\n", 1), encoding="utf-8")
+    git(ledger, "commit", "-q", "-am", "labnotes(meta): our own rule")
+    for version in ("9.9.9", "9.9.10"):
+        release(source, version, "AGENTS.md")
+        r = update_from(source, ledger)
+        assert r.returncode == 0 and carry in r.stdout, (version, r.stdout + r.stderr)
+        assert "Our own rule." in rules.read_text(encoding="utf-8"), "the ledger's rulebook stays as it is"
+
+
+@pytest.mark.skipif(ll.NAME != ll.SOURCE_NAME, reason="a ledger takes a newer tool from the tool's source repository")
 def test_an_update_decides_file_by_file_from_what_the_tool_last_wrote(tmp_path: Path, monkeypatch, capsys):
     """`setup --update`, run from a newer source, compares each file the ledger has committed with what setup or the last
     update wrote there, as their commits record it. A file left as written is replaced; a rulebook file the ledger changed

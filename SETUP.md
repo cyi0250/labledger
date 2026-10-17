@@ -67,7 +67,9 @@ against what the ledger has committed:
 - **A file the ledger left as the tool wrote it is replaced**, and a file the tool never wrote is added.
 - **A rulebook file the ledger changed** (`AGENTS.md`, `MACHINES.md`, `SETUP.md`: rules of its own, another language)
   stays as it is. The update puts the new version and the base the ledger changed beside it, in the ledger's `.git`,
-  and prints the `git merge-file` command that carries the new version's changes in.
+  and prints the `git merge-file` command that carries the new version's changes in. When no commit records what the
+  tool wrote there (a ledger setup did not make, which kept its own version of the file through every update), there
+  is no base: the update puts the new version alone and prints a `diff -u` to carry its changes over by hand.
 - **A tool file the ledger changed** (the script, its hooks, its tests, CI) is replaced all the same, and the update
   prints where the ledger's version is (`git show <commit>:<path>`). A file the ledger removed stays removed.
 - **It refuses before writing anything**: a clone older than what the ledger took (a lower version, or a source commit

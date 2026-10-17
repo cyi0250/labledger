@@ -38,8 +38,9 @@ On another machine, clone the ledger and run `python3 scripts/<ledger>.py setup`
 
 To take a newer version of labledger into a ledger later, clone labledger at that version and run
 `python3 labledger/scripts/labledger.py setup --update <ledger folder>`: it replaces the tool, and the rulebook files
-the ledger has not changed since setup or the last update. It leaves the ones the ledger changed, and prints the
-command that merges the new version into each.
+the ledger has not changed since setup or the last update. It leaves the ones the ledger changed, and prints for each
+the command that merges the new version in, or a `diff -u` command to compare and carry it over by hand when no
+commit records what the tool wrote there.
 
 [`examples/demo`](examples/demo) is a small finished ledger: a TODO settled by an experiment, with the benchmark script,
 its data table, a state table and two decisions.

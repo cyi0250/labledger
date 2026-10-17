@@ -3862,7 +3862,8 @@ def source_commit() -> str | None:
 
 def tool_marks(path: Path, name: str) -> tuple[str | None, dict[str, str]]:
     """What the history of the ledger `name` at `path` says the tool last wrote there: the source commit it last took, and
-    per file the blob setup or an update wrote. A ledger made before these marks goes by its setup commit, the root."""
+    per file the blob setup or an update wrote. A file no mark names goes by the ledger's setup commit, its root, when
+    setup made the ledger (before these marks it left none)."""
     took, blobs = None, {}
     for body in _run(path, "log", "--format=%B%x00", f"--grep=^{TOOL_MARK} ", "HEAD").stdout.split("\0"):  # newest first
         for line in body.splitlines():
@@ -3872,12 +3873,11 @@ def tool_marks(path: Path, name: str) -> tuple[str | None, dict[str, str]]:
             elif key == TOOL_MARK:
                 blob, _, rel = rest.partition(" ")
                 blobs.setdefault(rel, blob)
-    if not blobs:
-        for root in _run(path, "rev-list", "--max-parents=0", "HEAD").stdout.split():
-            if _run(path, "log", "-1", "--format=%s", root).stdout.strip() == f"{name}: start the ledger":
-                for line in _run(path, "ls-tree", "-r", root).stdout.splitlines():
-                    meta, _, rel = line.partition("\t")
-                    blobs[rel] = meta.split()[2]
+    for root in _run(path, "rev-list", "--max-parents=0", "HEAD").stdout.split():
+        if _run(path, "log", "-1", "--format=%s", root).stdout.strip() == f"{name}: start the ledger":
+            for line in _run(path, "ls-tree", "-r", root).stdout.splitlines():
+                meta, _, rel = line.partition("\t")
+                blobs.setdefault(rel, meta.split()[2])
     return took, blobs
 
 
@@ -3885,7 +3885,8 @@ def update_ledger(path: Path) -> int:
     """Bring the ledger at `path` up to this version of the tool, deciding file by file from what the tool last wrote
     there (the marks at the end of setup's and the updates' commits), against what the ledger has committed:
     - a file the ledger left as the tool wrote it is replaced, and one the tool never wrote is added;
-    - a rulebook file the ledger changed stays as it is, with this version and its base put beside it to merge;
+    - a rulebook file the ledger changed stays as it is, with this version and its base put beside it to merge (with no
+      record of what the tool wrote there, this version alone, to compare);
     - a tool file the ledger changed is replaced, naming where the ledger's version is; one it removed stays removed.
     The ledger is synced first, and its own new tool commits what was written. The skill is written again wherever this
     machine has it."""
