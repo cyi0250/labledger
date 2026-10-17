@@ -121,7 +121,8 @@ A reader runs an experiment again from the code it ran and the files it read.
   which are data. `manifest --check` finds them changed or gone; when files move, `manifest --move <old> <new>`
   points the rows at their new place.
 - *Guidance:* put the script that made each table in the attachments, beside it (for a table one command made, that
-  command in a `.sh` file); review group 9 lists the final experiments whose tables have none.
+  command in a `.sh` file); review group 9 lists the final experiments whose tables have none. Say how many times each
+  run was repeated and whether the runs agreed; a column that numbers runs or seeds ends with `[id]`.
 
 ## How to work
 

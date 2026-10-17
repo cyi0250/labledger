@@ -139,8 +139,8 @@ ledger it reads or writes.>
 ## Results
 
 <Summary tables of the measured values, each under a line naming the data file it comes from (frontmatter `data`) and
-the script in the attachments, or the command above, that made it. Report what was measured, failures and regressions
-included.>
+the script in the attachments, or the command above, that made it. Say how many times each run was repeated and
+whether the runs agreed. Report what was measured, failures and regressions included.>
 
 ## Reading
 
