@@ -138,8 +138,9 @@ ledger it reads or writes.>
 
 ## Results
 
-<Summary tables of the measured values, each under a line naming the data file it comes from (frontmatter `data`).
-Report what was measured, failures and regressions included.>
+<Summary tables of the measured values, each under a line naming the data file it comes from (frontmatter `data`) and
+the script in the attachments, or the command above, that made it. Report what was measured, failures and regressions
+included.>
 
 ## Reading
 
@@ -1981,6 +1982,11 @@ def cmd_review(args) -> int:
               f"(`resolve issue <slug> --by <TODO>`)", ""]
     for i, todos in promoted_closed:
         lines.append(f"- `{i.slug}` — " + ", ".join(f"{t.id} {t.fm['status']}" for t in todos))
+    scriptless = [e for e in graph.exp_order() if e.fm["status"] == "final" and tables_without_script(graph, e)]
+    lines += ["", f"## 9. Final experiments whose tables have no script beside them — {len(scriptless)} (put the script "
+              f"that made each table in its attachments; for a table one command made, that command in a .sh file)", ""]
+    for e in scriptless:
+        lines.append(f"- {e.id} · {', '.join(tables_without_script(graph, e))} — {e.fm['title']}")
     if args.json:
         groups = [("open TODOs with records newer than their updated", [t.id for t, _ in unabsorbed]),
                   (f"open TODOs unchanged for {STALE_DAYS} days", [t.id for t in stale]),
@@ -1989,7 +1995,8 @@ def cmd_review(args) -> int:
                   (f"experiments in flight for more than {STALE_EXP_DAYS} days", [e.id for e in in_flight]),
                   (f"open issues and investigations not updated for {STALE_OPEN_DAYS} days", [a for a, _, _ in old_open]),
                   ("done arcs with open members", [a.id for a, _ in done_open]),
-                  ("promoted issues whose TODOs are all closed", [f"issue:{i.slug}" for i, _ in promoted_closed])]
+                  ("promoted issues whose TODOs are all closed", [f"issue:{i.slug}" for i, _ in promoted_closed]),
+                  ("final experiments whose tables have no script beside them", [e.id for e in scriptless])]
         print(json.dumps({"today": today.isoformat(), "groups": [{"group": n, "title": title, "items": items}
                                                                  for n, (title, items) in enumerate(groups, 1)]}, ensure_ascii=False))
         return 0
@@ -3684,6 +3691,8 @@ SNAPSHOT_ENV = {"GIT_AUTHOR_NAME": "labledger", "GIT_AUTHOR_EMAIL": "code@labled
                 "GIT_COMMITTER_DATE": "1970-01-01T00:00:00+0000"}  # the same files for the same run are the same commit, on any machine
 MANIFEST = "manifest.tsv"  # experiments/attachments/EXP-NNNN/manifest.tsv: the files outside the ledger its runs used
 MANIFEST_COLUMNS = ("path", "host", "bytes[B]", "sha256")
+SCRIPT_SUFFIXES = (".py", ".sh", ".bash", ".zsh", ".tcl", ".r", ".jl", ".m", ".ipynb", ".js", ".mjs", ".pl", ".rb", ".awk", ".mk")
+SCRIPT_NAMES = ("Makefile", "makefile", "GNUmakefile")
 CODE_HELP = fill_help(f"""\
 code records the code each run of an experiment uses, before the run. For every repository named (a folder in one
 names the repository), every submodule checked out under it and every repository inside it that git does not track, the
@@ -3835,6 +3844,19 @@ def merge_manifest(rows: list[dict[str, str]], new: list[dict[str, str]]) -> lis
     """`rows` with each of `new` in place of the row for the same path on the same host."""
     taken = {(r["path"], r["host"]) for r in new}
     return [r for r in rows if (r["path"], r["host"]) not in taken] + new
+
+
+def tables_without_script(graph: Graph, exp) -> list[str]:
+    """The data tables of `exp` when its attachments hold no script (a SCRIPT_SUFFIXES file, a Makefile); else []."""
+    tables = [data_key(d) for d in exp.fm.get("data") or [] if not DATA_NA_RE.match(str(d).strip())]
+    if not tables:
+        return []
+    folder = f"{ATTACHMENTS}{exp.id}/"
+    files = {f for f in graph.tracked or () if f.startswith(folder)}
+    if (graph.root / folder).is_dir():
+        files |= {f.relative_to(graph.root).as_posix() for f in (graph.root / folder).rglob("*") if f.is_file()}
+    scripts = [f for f in files if PurePosixPath(f).suffix.lower() in SCRIPT_SUFFIXES or PurePosixPath(f).name in SCRIPT_NAMES]
+    return [] if scripts else tables
 
 
 def code_vault(root: Path, push: bool) -> str:
@@ -4277,7 +4299,7 @@ it when the ledger has a remote; the user set the ledger up that way, so record 
 | What happened | Command |
 |---|---|
 | a run is about to start | `new exp "<title>"` if it has none, then `code EXP-NNNN <repository or folder> …`: the code it runs, uncommitted changes included |
-| a run produced numbers | its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; `manifest EXP-NNNN <path> …` lists the files outside the ledger it read or wrote; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
+| a run produced numbers | its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`), beside the script that made them, and are linked from the body; `manifest EXP-NNNN <path> …` lists the files outside the ledger it read or wrote; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
 | something was decided | `new decision <slug> --text "…" --why "…" [--area <area>]` |
 | a defect, a surprise or an open question | `new issue <area> <slug> --symptom "…" [--path "…" --hypothesis "…"]` |
 | an investigation, review or design | `new inv <area> "<title>"`, then the body, then `set inv:<name> --status concluded --summary "…"` |

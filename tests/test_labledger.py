@@ -691,7 +691,7 @@ def test_json_output_is_the_whole_of_stdout(repo: Path, capsys, monkeypatch):
     assert [m["address"] for m in output("find", "first")["matches"]] == ["LAB-001", "EXP-0001", "ARC-001"]
     todo = output("show", "LAB-001")
     assert todo["head"]["status"] == "planned" and "EXP-0001" in {m["source"] for m in todo["inbound"]} and todo["arcs"] == ["ARC-001"]
-    assert [g["group"] for g in output("review")["groups"]] == list(range(1, 9))
+    assert [g["group"] for g in output("review")["groups"]] == list(range(1, 10))
     assert output("new", "exp", "second") == {"address": "EXP-0002", "file": "experiments/EXP-0002.md", "exit": 0}
     assert output("new", "exp", "refused", "--affects", "NOPE-001", rc=2) == {"exit": 2}
     monkeypatch.setenv("LABLEDGER_HOST", "no such host")
@@ -2272,6 +2272,22 @@ def test_a_partial_clone_neither_checks_nor_rewrites_manifests_it_lacks(grepo: P
         assert run(b, *argv) == 2, argv
         assert "not in this partial clone" in capsys.readouterr().err, argv
     assert run(b, "manifest", "--check") == 1 and "not checked: the manifests of EXP-0001" in capsys.readouterr().out
+
+
+def test_review_lists_final_experiments_whose_tables_have_no_script_beside_them(repo: Path, capsys):
+    """Review group 9: a final experiment whose `data` names tables while its attachments hold no script (the script, or
+    the one command that made a table in a .sh file, goes beside the tables)."""
+    exp_table(repo, "model,latency[ms]\nresnet,12.5\n")
+    assert run(repo, "set", "EXP-0001", "--status", "final", "--data", "runs.csv: one row per model", "--code", "n/a (x)") == 0
+
+    def group9() -> list[str]:
+        capsys.readouterr()
+        assert run(repo, "review", "--json") == 0
+        return json.loads(capsys.readouterr().out)["groups"][8]["items"]
+
+    assert group9() == ["EXP-0001"]
+    (repo / "experiments" / "attachments" / "EXP-0001" / "make_table.sh").write_text("python3 bench.py > runs.csv\n", encoding="utf-8")
+    assert group9() == []
 
 
 def test_a_folder_its_repository_ignores_is_kept_as_a_folder_of_its_own(grepo: Path, origin: Path, tmp_path: Path):

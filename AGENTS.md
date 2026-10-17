@@ -120,6 +120,8 @@ A reader runs an experiment again from the code it ran and the files it read.
   sha256, in `experiments/attachments/EXP-NNNN/manifest.tsv`, where `code` also lists the untracked files over 1 MB,
   which are data. `manifest --check` finds them changed or gone; when files move, `manifest --move <old> <new>`
   points the rows at their new place.
+- *Guidance:* put the script that made each table in the attachments, beside it (for a table one command made, that
+  command in a `.sh` file); review group 9 lists the final experiments whose tables have none.
 
 ## How to work
 
@@ -168,7 +170,7 @@ validate is green before the turn ends, and hand edits are committed in the turn
 | an issue was settled | `resolve issue <slug> --by "<EXP, commit, inv:, document>"` | the issue: `resolved` and one line |
 | something is to be done | `new todo <area> "<title>" --from …`; for an issue also `promote issue <slug> --to <ID>` | `areas/<area>/<ID>.md` |
 | a run is about to start | `new exp "<title>"` once, then `code EXP-NNNN <repository or folder> …` | its `code`; snapshots in the code vault |
-| a run produced numbers | its tables in the attachments; `manifest EXP-NNNN <path> …` for the files outside the ledger; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
+| a run produced numbers | its tables and the scripts that made them in the attachments; `manifest EXP-NNNN <path> …` for the files outside the ledger; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
 | a status was judged, or work finished | `set <ID> --status … --note … [--evidence EXP-NNNN]` | the head; a close decision for done or dropped |
 | work spanning several TODOs began | `new arc "<title>" --members … --exps … --areas …` | `arcs/ARC-NNN.md` |
 | something was decided | `new decision <slug> --text … [--area <area>] [--context --why]` | `areas/<area>/decisions/` or `decisions/` |
