@@ -29,6 +29,7 @@ import datetime as dt
 import difflib
 import errno
 import fcntl
+import hashlib
 import importlib.util
 import io
 import json
@@ -125,7 +126,8 @@ EXP_SKELETON = """## Question
 
 ## Setup
 
-<What was changed and where its configuration lives: everything needed to run it again.>
+<What was changed and where its configuration lives: everything needed to run it again. `manifest <ID> <path> …`
+records the files outside the ledger it reads or writes.>
 
 ## Commands
 
@@ -1611,6 +1613,7 @@ def check_node(graph: Graph, kind: str, node) -> list[str]:
             out.append(f"{rel}: superseded needs `superseded_by`")
         if isinstance(fm.get("data"), list) or status == "final":
             out += data_problems(graph, node)
+        out += manifest_problems(graph, node)
         if fm.get("superseded_by") and fm["superseded_by"] not in graph.exps:
             out.append(f"{rel}: superseded_by unknown {fm['superseded_by']}")
     elif kind == "arc":
@@ -1807,6 +1810,8 @@ def validate_help() -> str:
         "that holds only numbers ends its name with their unit in brackets: latency[ms]; [1] for a count or a ratio; [id] "
         "for numbers that name things. A JSON file has to parse. A table is read where it is on disk; where it is "
         "not (a partial clone, CI), git must have it.",
+        f"Files. {ATTACHMENTS}EXP-NNNN/{MANIFEST}, where there is one, has the columns {' '.join(MANIFEST_COLUMNS)}: an "
+        "absolute path, a host name, a whole number of bytes and 64 hex digits, each path on each host once.",
         f"State. A state table, state/<name>.csv, has the columns {', '.join(STATE_COLUMNS)} (optional: "
         f"{', '.join(STATE_OPTIONAL)}; every other column is a condition the value holds under). item, value and commit "
         f"are filled, kind is {' or '.join(STATE_KINDS)}, measured_at is YYYY-MM-DD, exp is a final experiment whose "
@@ -1820,6 +1825,11 @@ def validate_help() -> str:
         "closed_by holding {evidence}.",
     ]
     return "\n\n".join(p if "\n" in p else fill(p) for p in paragraphs)
+
+
+def fill_help(text: str) -> str:
+    """A --help paragraph written over several source lines, filled to the width of validate --help."""
+    return textwrap.fill(text.replace("\n", " "), 116, break_on_hyphens=False, break_long_words=False)
 
 
 COMMIT_HELP = """\
@@ -1838,8 +1848,8 @@ push, and ends with exit code 3."""
 EXIT_CODES = """\
 exit codes:
   0  done: written, committed and pushed, as far as the clone and the options allow
-  1  a check found problems: validate, a refused commit, a stopped sync, a number the remote did not reserve, find
-     with no match
+  1  a check found problems: validate, a refused commit, a stopped sync, a number the remote did not reserve, a
+     manifest whose files changed, find with no match
   2  nothing was written: a usage error, a rule the record would break, an unknown address, a record file that is
      there already, settings this machine cannot use, a machine without a name (LABLEDGER_HOST), a session that cannot
      write where the command writes
@@ -3638,6 +3648,228 @@ def cmd_attachments(args) -> int:
     return 0
 
 
+# ───────────────────────────── the files a run used ─────────────────────────────
+
+MANIFEST = "manifest.tsv"  # experiments/attachments/EXP-NNNN/manifest.tsv: the files outside the ledger its runs used
+MANIFEST_COLUMNS = ("path", "host", "bytes[B]", "sha256")
+MANIFEST_HELP = fill_help(f"""\
+manifest lists the files outside the ledger that an experiment's runs read or wrote, one row per file in
+{ATTACHMENTS}EXP-NNNN/{MANIFEST}: its path, the machine, its size and its sha256 (a folder gives every file under
+it; a file listed again replaces its row). `manifest --check [EXP-NNNN …]` hashes this machine's files again, of the
+experiments named or of all, and ends with exit code 1 when one is missing or changed, or when a manifest could not
+be checked: one that does not validate, or one a partial clone leaves off disk. When files move, `manifest --move
+<old> <new>` points this machine's rows under <old> at the same files under <new>, once each is there with its size,
+and names the experiments whose bodies still say <old>. A manifest that does not validate is not written to.""")
+
+
+class CodeError(Exception):
+    pass
+
+
+def manifest_rows(path: Path) -> list[dict[str, str]]:
+    """The rows of a manifest that validates (manifest_problems), by column name; [] when there is none."""
+    if not path.is_file():
+        return []
+    rows = [r for r in csv.reader(io.StringIO(path.read_text(encoding="utf-8")), delimiter="\t") if r]
+    return [dict(zip(rows[0], r)) for r in rows[1:]] if rows else []
+
+
+def manifest_problems(graph: Graph, exp) -> list[str]:
+    """An EXP's manifest, where it is on disk: the header MANIFEST_COLUMNS, then an absolute path, a host name, a whole
+    number of bytes and a sha256 on every row, each path on each host once."""
+    rel = f"{ATTACHMENTS}{exp.id}/{MANIFEST}"
+    try:
+        text = (graph.root / rel).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except UnicodeDecodeError:
+        return [f"{rel}: not UTF-8 text"]
+    rows = [r for r in csv.reader(io.StringIO(text), delimiter="\t") if r]
+    if not rows or tuple(rows[0]) != MANIFEST_COLUMNS:
+        return [f"{rel}: the header must be {' '.join(MANIFEST_COLUMNS)}, tab-separated — `manifest {exp.id} <path> …` writes it"]
+    out, seen = [], set()
+    for n, row in enumerate(rows[1:], 2):
+        if len(row) != len(MANIFEST_COLUMNS):
+            out.append(f"{rel}:{n}: {len(row)} fields, the header {len(MANIFEST_COLUMNS)}")
+            continue
+        path, host, size, digest = row
+        if not path.startswith("/"):
+            out.append(f"{rel}:{n}: path `{path}` is not absolute")
+        if not HOST_RE.match(host):
+            out.append(f"{rel}:{n}: host `{host}` is not a host name")
+        if not size.isdigit():
+            out.append(f"{rel}:{n}: bytes `{size}` is not a whole number")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            out.append(f"{rel}:{n}: sha256 `{digest}` is not 64 hex digits")
+        if (path, host) in seen:
+            out.append(f"{rel}:{n}: {path} on {host} is listed twice")
+        seen.add((path, host))
+    return out
+
+
+def write_manifest(path: Path, rows: list[dict[str, str]]) -> None:
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter="\t", lineterminator="\n")
+    writer.writerow(MANIFEST_COLUMNS)
+    writer.writerows([r[c] for c in MANIFEST_COLUMNS] for r in sorted(rows, key=lambda r: (r["host"], r["path"])))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(out.getvalue(), encoding="utf-8")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def manifest_entries(paths: list[Path], host: str) -> list[dict[str, str]]:
+    """A manifest row for each file at `paths`, a folder giving every file under it (links to folders not followed)."""
+    files = []
+    for p in paths:
+        if p.is_dir():
+            files += sorted(Path(d) / f for d, _, names in os.walk(p) for f in names if (Path(d) / f).is_file())
+        else:
+            files.append(p)
+    for f in files:
+        try:
+            str(f).encode("utf-8")
+        except UnicodeEncodeError:
+            raise CodeError(f"{str(f).encode('utf-8', 'surrogateescape')!r}: a manifest holds UTF-8 file names only") from None
+    return [{"path": str(f), "host": host, "bytes[B]": str(f.stat().st_size), "sha256": file_sha256(f)} for f in files]
+
+
+def merge_manifest(rows: list[dict[str, str]], new: list[dict[str, str]]) -> list[dict[str, str]]:
+    """`rows` with each of `new` in place of the row for the same path on the same host."""
+    taken = {(r["path"], r["host"]) for r in new}
+    return [r for r in rows if (r["path"], r["host"]) not in taken] + new
+
+
+def off_disk_attachments(root: Path, exp_id: str) -> bool:
+    """Whether this partial clone leaves the attachments of `exp_id` off disk (MACHINES.md)."""
+    try:
+        return off_disk(f"{ATTACHMENTS}{exp_id}/", sparse_exps(root))
+    except CommitError:
+        return False  # a sparse checkout of another form, which a commit names
+
+
+def cmd_manifest(args) -> int:
+    root = args.root
+    graph = load_graph(root)
+    if args.check:
+        return manifest_check(graph, args.items)
+    if args.move:
+        return manifest_move(args, graph, *args.move)
+    if len(args.items) < 2:
+        print("name the experiment and its files or folders: `manifest EXP-NNNN <path> …`", file=sys.stderr)
+        return 2
+    exp = graph.exps.get(args.items[0])
+    if exp is None:
+        print(f"`manifest` takes an experiment, EXP-NNNN; `{args.items[0]}` is unknown{did_you_mean(graph, args.items[0])}", file=sys.stderr)
+        return 2
+    if off_disk_attachments(root, exp.id):
+        print(f"{exp.id}'s attachments are not in this partial clone — `attachments {exp.id}` brings them in", file=sys.stderr)
+        return 2
+    problems = manifest_problems(graph, exp)
+    if problems:  # its rows would be read wrong, and written back so
+        return refuse(problems)
+    missing = [p for p in args.items[1:] if not Path(p).exists()]
+    if missing:
+        print(f"not found: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    try:
+        new = manifest_entries([Path(os.path.abspath(p)) for p in args.items[1:]], record_host())
+    except CodeError as exc:
+        print(f"nothing listed — {exc}", file=sys.stderr)
+        return 2
+    manifest = root / ATTACHMENTS / exp.id / MANIFEST
+    write_manifest(manifest, merge_manifest(manifest_rows(manifest), new))
+    print(f"{exp.id}: {len(new)} file(s), {sum(int(r['bytes[B]']) for r in new) / 1e6:.1f} MB, in {ATTACHMENTS}{exp.id}/{MANIFEST}")
+    return written(args, [f"{ATTACHMENTS}{exp.id}"], commit_subject(root, "exp", f"{exp.id} manifest"))
+
+
+def manifest_check(graph: Graph, ids: list[str]) -> int:
+    unknown = [i for i in ids if i not in graph.exps]
+    if unknown:
+        print(f"unknown {', '.join(unknown)} — a manifest belongs to an EXP-NNNN", file=sys.stderr)
+        return 2
+    exps = [graph.exps[i] for i in ids] if ids else graph.exp_order()
+    away = [e.id for e in exps if off_disk_attachments(graph.root, e.id)
+            and (ids or f"{ATTACHMENTS}{e.id}/{MANIFEST}" in (graph.tracked or ()))]
+    if ids and away:
+        print(f"the attachments of {', '.join(away)} are not in this partial clone — `attachments {' '.join(away)}` brings "
+              "them in", file=sys.stderr)
+        return 2
+    host, problems, checked, elsewhere = record_host(), [], 0, 0
+    broken = [p for e in exps if e.id not in away for p in manifest_problems(graph, e)]
+    for e in exps:
+        if e.id in away or any(p.startswith(f"{ATTACHMENTS}{e.id}/") for p in broken):  # rows read wrong would pass as another machine's
+            continue
+        for r in manifest_rows(graph.root / ATTACHMENTS / e.id / MANIFEST):
+            if r["host"] != host:
+                elsewhere += 1
+                continue
+            checked += 1
+            path = Path(r["path"])
+            if not path.is_file():
+                problems.append(f"{e.id}: {path} is missing")
+            elif str(path.stat().st_size) != r["bytes[B]"]:
+                problems.append(f"{e.id}: {path} changed: {r['bytes[B]']} → {path.stat().st_size} bytes")
+            elif file_sha256(path) != r["sha256"]:
+                problems.append(f"{e.id}: {path} changed: the same size, other bytes")
+    print(f"checked {checked} file(s) on {host}" + (f" ({elsewhere} on other machines left)" if elsewhere else "")
+          + (":" if problems else ": every one as recorded" if checked else ""), *problems, sep="\n  " if problems else "")
+    if problems:
+        print("files that moved: `manifest --move <old> <new>` points the rows at them")
+    if broken:
+        print("not checked: manifests that do not validate —", *broken, sep="\n  ")
+    if away:
+        print(f"not checked: the manifests of {', '.join(away)}, whose attachments this partial clone leaves off disk — "
+              f"`attachments {' '.join(away)}` brings them in")
+    return 1 if problems or broken or away else 0
+
+
+def manifest_move(args, graph: Graph, old: str, new: str) -> int:
+    away = [e.id for e in graph.exp_order() if f"{ATTACHMENTS}{e.id}/{MANIFEST}" in (graph.tracked or ())
+            and off_disk_attachments(graph.root, e.id)]
+    if away:
+        print(f"nothing moved — the manifests of {', '.join(away)} are not in this partial clone: `attachments "
+              f"{' '.join(away)}` brings them in", file=sys.stderr)
+        return 2
+    broken = [p for e in graph.exp_order() for p in manifest_problems(graph, e)]
+    if broken:  # their rows would be read wrong, and written back so
+        return refuse(broken)
+    host = record_host()
+    old_path, new_path = os.path.abspath(old).rstrip("/"), os.path.abspath(new).rstrip("/")
+    changed, problems, moved = {}, [], 0
+    for e in graph.exp_order():
+        manifest = graph.root / ATTACHMENTS / e.id / MANIFEST
+        rows = manifest_rows(manifest)
+        hits = [r for r in rows if r["host"] == host and (r["path"] == old_path or r["path"].startswith(old_path + "/"))]
+        for r in hits:
+            target = Path(new_path + r["path"][len(old_path):])
+            if not target.is_file() or str(target.stat().st_size) != r["bytes[B]"]:
+                problems.append(f"{e.id}: {target} is not there with its {r['bytes[B]']} bytes")
+            r["path"] = str(target)
+        if hits:
+            changed[e.id] = (manifest, rows)
+            moved += len(hits)
+    if problems:
+        print("nothing moved —", *problems, sep="\n  ", file=sys.stderr)
+        return 2
+    if not changed:
+        print(f"no manifest row on {host} is under {old_path}")
+        return 0
+    for manifest, rows in changed.values():
+        write_manifest(manifest, rows)
+    print(f"{moved} row(s) of {len(changed)} experiment(s) point under {new_path} now")
+    said = [e.id for e in graph.exp_order() if old in e.body or old_path in e.body]
+    if said:
+        print(f"the bodies of {', '.join(said)} still say {old}")
+    return written(args, [f"{ATTACHMENTS}{i}" for i in changed], commit_subject(graph.root, "exp", f"manifest: {old_path} → {new_path}"))
+
+
 # ───────────────────────────── setup ─────────────────────────────
 
 SOURCE_NAME = "lab" "ledger"  # the name in the tool's source files, which setup replaces in a new ledger (split so the replacing skips it)
@@ -3683,7 +3915,7 @@ it when the ledger has a remote; the user set the ledger up that way, so record 
 
 | What happened | Command |
 |---|---|
-| a run produced numbers | `new exp "<title>"`; its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
+| a run produced numbers | `new exp "<title>"`; its tables go in `experiments/attachments/EXP-NNNN/` with each numeric column's unit in its name (`latency[ms]`) and are linked from the body; `manifest EXP-NNNN <path> …` lists the files outside the ledger it read or wrote; when it is done, `set EXP-NNNN --status final --summary "…" --data "<file>: <what one row is>"` |
 | something was decided | `new decision <slug> --text "…" --why "…" [--area <area>]` |
 | a defect, a surprise or an open question | `new issue <area> <slug> --symptom "…" [--path "…" --hypothesis "…"]` |
 | an investigation, review or design | `new inv <area> "<title>"`, then the body, then `set inv:<name> --status concluded --summary "…"` |
@@ -4231,6 +4463,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("--host", help="exp: the machine its local paths are on")
     p.add_argument("--model", help="exp"); p.add_argument("--commit", help="exp")
     p.add_argument("--date", help="the date of `updated` and of a close decision (default: today; for records made late)")
+    p = sub.add_parser("manifest", help="list by size and sha256 the files outside the ledger a run reads or writes; check them; "
+                                        "follow them when they move", description=MANIFEST_HELP,
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.set_defaults(func=cmd_manifest)
+    p.add_argument("items", nargs="*", metavar="EXP-NNNN PATH", help="the experiment, then its files or folders")
+    p.add_argument("--check", action="store_true", help="hash this machine's files again (of the experiments named, or of all)")
+    p.add_argument("--move", nargs=2, metavar=("OLD", "NEW"), help="this machine's rows under OLD point under NEW, where the files are now")
     p = sub.add_parser("commit", help="commit these records and files only (other uncommitted work stays as it is)",
                        description=COMMIT_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.set_defaults(func=cmd_commit)
@@ -4253,7 +4492,12 @@ def main(argv: list[str]) -> int:
     p.set_defaults(func=cmd_hook)
     p.add_argument("name", choices=("pre-commit", "pre-push"))
     p.add_argument("hook_args", nargs="*", help="what git passes (pre-push: the remote's name and URL)")
-    args = parser.parse_args(argv, argparse.Namespace(root=ROOT, no_commit=False, no_push=False, offline=False, json=False))
+    args, extra = parser.parse_known_args(argv, argparse.Namespace(root=ROOT, no_commit=False, no_push=False, offline=False, json=False))
+    if extra:  # argparse fills a positional once: paths after an option that follows the experiment are left over
+        rest = {"manifest": "items"}.get(args.cmd)
+        if rest is None or any(e.startswith("-") for e in extra):
+            parser.error(f"unrecognized arguments: {' '.join(extra)}")
+        getattr(args, rest).extend(extra)
     args.root = args.root.resolve()
     if args.json and args.cmd == "new":  # stdout holds the record made, as one JSON line; what is said along the way goes to stderr
         with contextlib.redirect_stdout(sys.stderr):
@@ -4274,13 +4518,20 @@ def unwritable(folder: Path) -> str | None:
     return None
 
 
+def reads_only(args) -> bool:
+    """The mode of a writing command that writes nothing in the ledger: `manifest --check`."""
+    return args.cmd == "manifest" and args.check
+
+
 def unwritable_place(args) -> tuple[Path, str] | None:
     """The first place the command writes that this session may not, with the reason: the ledger's folder for a command
     that writes files, and in a git clone its .git for one that commits, syncs or takes a number."""
     check = getattr(args, "check", False)
-    places = [args.root] if args.cmd in ("new", "set", "resolve", "promote", "attachments") or (
+    if reads_only(args):
+        return None
+    places = [args.root] if args.cmd in ("new", "set", "resolve", "promote", "attachments", "manifest") or (
         args.cmd in ("render", "fmt") and not check) else []
-    if args.cmd in ("new", "set", "resolve", "promote", "attachments", "commit", "sync"):
+    if args.cmd in ("new", "set", "resolve", "promote", "attachments", "commit", "sync", "manifest"):
         with contextlib.suppress(CommitError):  # not a git clone: nothing is committed there
             places.append(git_dir(args.root))
     for place in places:
@@ -4301,7 +4552,7 @@ def run_command(args) -> int:
               "command where the ledger and its .git can be written", file=sys.stderr)
         return 2
     try:
-        if args.cmd in ("new", "set", "resolve", "promote", "commit"):
+        if args.cmd in ("new", "set", "resolve", "promote", "commit", "manifest") and not reads_only(args):
             record_today(args.root)  # the settings and the day it stamps, read before the command writes anything
         return args.func(args)
     except Refusal as exc:

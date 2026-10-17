@@ -39,6 +39,7 @@ record is committed (see [Commits](#commits)).
 - **Statuses**: a `dropped` TODO and a `parked` arc say why; a closed TODO has its close decision, which `set` writes.
 - **Numbers**: a final experiment's `data` tables exist, are linked from its body and read as tables; state tables have
   their columns and cite final experiments.
+- **Files**: an experiment's `manifest.tsv` holds the columns `manifest` writes.
 
 How the records fit together. The tool computes what this describes; the advice in it is *guidance*:
 
@@ -97,6 +98,14 @@ A reader checks a number by opening the table it was computed from.
 - *Guidance:* write a current value once, in `state/`, and cite it elsewhere by its EXP. validate cannot see a copy
   of a value in a TODO or a decision.
 
+## The files a run used
+
+A reader runs an experiment again from the files it read.
+
+- **`manifest EXP-NNNN <path> …` lists the files outside the ledger a run read or wrote**: path, machine, size and
+  sha256, in `experiments/attachments/EXP-NNNN/manifest.tsv`. `manifest --check` finds them changed or gone; when
+  files move, `manifest --move <old> <new>` points the rows at their new place.
+
 ## How to work
 
 *Guidance*, all of it: the commands enforce the rules above, and this is the order of work that keeps them easy.
@@ -142,7 +151,7 @@ validate is green before the turn ends, and hand edits are committed in the turn
 | an investigation, review, audit or design | `new inv <area> "<title>"`, the body, then `set inv:<name> --status concluded --summary … --affects …` | `areas/<area>/<slug>-<date>.md` |
 | an issue was settled | `resolve issue <slug> --by "<EXP, commit, inv:, document>"` | the issue: `resolved` and one line |
 | something is to be done | `new todo <area> "<title>" --from …`; for an issue also `promote issue <slug> --to <ID>` | `areas/<area>/<ID>.md` |
-| a run produced numbers | `new exp "<title>"`; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
+| a run produced numbers | `new exp "<title>"`; `manifest EXP-NNNN <path> …` for the files outside the ledger; when done, `set EXP-NNNN --status final --summary … --data …` | `experiments/EXP-NNNN.md`, tables in `experiments/attachments/EXP-NNNN/` |
 | a status was judged, or work finished | `set <ID> --status … --note … [--evidence EXP-NNNN]` | the head; a close decision for done or dropped |
 | work spanning several TODOs began | `new arc "<title>" --members … --exps … --areas …` | `arcs/ARC-NNN.md` |
 | something was decided | `new decision <slug> --text … [--area <area>] [--context --why]` | `areas/<area>/decisions/` or `decisions/` |

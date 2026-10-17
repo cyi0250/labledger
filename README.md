@@ -5,6 +5,8 @@ observations and decisions, one Markdown file per record in a git repository, ch
 
 - **Every number traces back.** An experiment names the CSV tables its numbers come from, and its body links them. A
   current value in `state/` names its experiment, the code version and the day it was measured.
+- **A run's files can be checked again.** `manifest` lists the files outside the ledger a run read or wrote by size
+  and sha256, and follows them when they move.
 - **Statuses are judged again.** `review` lists what needs another look: TODOs that newer records mention,
   experiments left in flight, issues nobody touched for two months.
 - **Agents record on their own.** A skill named as you call the ledger leads them to it whenever their work produces

@@ -34,6 +34,11 @@ machine.
 Write commands stamp today in `timezone` from `labledger.yml`, or in each machine's own time zone when that names none.
 *Guidance:* a ledger written from several time zones names one.
 
+## Files on several machines
+
+A manifest's rows name their machine: `manifest`, `--check` and `--move` act on the files of the machine they run on,
+so they run where the files are.
+
 ## Sync
 
 `sync` brings in what other machines pushed, and the tool runs it when a push is refused because another machine

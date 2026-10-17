@@ -1982,3 +1982,73 @@ def test_an_update_syncs_the_ledger_first(tmp_path: Path, monkeypatch):
     assert r.returncode == 0, r.stdout + r.stderr
     assert git(ledger, "log", "-2", "--format=%s") == "labnotes: take labledger 9.9.9\nlabnotes(meta): a note from another machine\n"
     assert git(remote, "rev-parse", "main") == git(ledger, "rev-parse", "HEAD"), "pushed on top of the other machine's work"
+
+
+# ───────────────────────────── the files a run used ─────────────────────────────
+
+def test_manifest_lists_checks_and_follows_the_files_a_run_used(grepo: Path, tmp_path: Path, monkeypatch, capsys):
+    """`manifest` writes the size and sha256 of files outside the ledger into the EXP's manifest.tsv and commits that
+    alone, `--check` finds this machine's files changed or gone and leaves another machine's to it, and `--move` follows
+    them to where they were moved, naming the bodies that still say the old place."""
+    data = tmp_path / "data"
+    (data / "inputs").mkdir(parents=True)
+    (data / "inputs" / "model.bin").write_bytes(b"m" * 10)
+    (data / "out.csv").write_text("a,b\n", encoding="utf-8")
+    exp = grepo / "experiments" / "EXP-0001.md"
+    exp.write_text(exp.read_text(encoding="utf-8") + f"\nInputs in {data}.\n", encoding="utf-8")
+    git(grepo, "commit", "-q", "-am", "body names the data")
+    exp.write_text(exp.read_text(encoding="utf-8") + "\nHalf a sentence another session is writ", encoding="utf-8")
+    assert run(grepo, "manifest", "EXP-0001", str(data)) == 0
+    manifest = grepo / "experiments" / "attachments" / "EXP-0001" / "manifest.tsv"
+    assert manifest.read_text(encoding="utf-8").splitlines()[0] == "path\thost\tbytes[B]\tsha256"
+    assert [r["path"] for r in ll.manifest_rows(manifest)] == [str(data / "inputs" / "model.bin"), str(data / "out.csv")]
+    assert git(grepo, "show", "--name-only", "--format=", "HEAD").split() == ["experiments/attachments/EXP-0001/manifest.tsv"]
+    assert "Half a sentence" in exp.read_text(encoding="utf-8"), "the experiment's own file is not committed along"
+    assert run(grepo, "manifest", "--check") == 0
+    (tmp_path / "gpu.bin").write_bytes(b"g")
+    monkeypatch.setenv("LABLEDGER_HOST", "gpu-box")
+    assert run(grepo, "manifest", "EXP-0001", str(tmp_path / "gpu.bin")) == 0
+    monkeypatch.setenv("LABLEDGER_HOST", "test-server")
+    (tmp_path / "gpu.bin").unlink()
+    capsys.readouterr()
+    assert run(grepo, "manifest", "--check") == 0 and "(1 on other machines left)" in capsys.readouterr().out
+    (data / "out.csv").write_text("a,c\n", encoding="utf-8")
+    capsys.readouterr()
+    assert run(grepo, "manifest", "--check", "EXP-0001") == 1 and "out.csv changed: the same size, other bytes" in capsys.readouterr().out
+    (data / "out.csv").write_text("a,b\n", encoding="utf-8")
+    moved = tmp_path / "archive" / "data"
+    moved.parent.mkdir()
+    data.rename(moved)
+    assert run(grepo, "manifest", "--check") == 1 and "model.bin is missing" in capsys.readouterr().out
+    assert run(grepo, "manifest", "--move", str(tmp_path / "elsewhere"), str(moved)) == 0
+    assert "no manifest row" in capsys.readouterr().out
+    assert run(grepo, "manifest", "--move", str(data), str(moved)) == 0
+    assert f"the bodies of EXP-0001 still say {data}" in capsys.readouterr().out
+    assert run(grepo, "manifest", "--check") == 0
+    (moved / "out.csv").unlink()
+    assert run(grepo, "manifest", "--move", str(moved), str(data)) == 2, "files that are not at the new place move nothing"
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    manifest.write_text("\n".join([lines[0], *(l.replace("test-server", "a b") for l in lines[1:]), "short"]) + "\n", encoding="utf-8")
+    broken = manifest.read_bytes()
+    capsys.readouterr()
+    assert run(grepo, "validate") == 1 and "host `a b` is not a host name" in capsys.readouterr().out
+    assert run(grepo, "manifest", "--check") == 1 and "not checked: manifests that do not validate" in capsys.readouterr().out
+    assert run(grepo, "manifest", "EXP-0001", str(moved / "inputs" / "model.bin")) == 2
+    assert "host `a b` is not a host name" in capsys.readouterr().err and manifest.read_bytes() == broken, "rows read wrong are not written back"
+    assert run(grepo, "manifest", "--move", str(moved), str(data)) == 2 and manifest.read_bytes() == broken
+
+
+def test_a_partial_clone_neither_checks_nor_rewrites_manifests_it_lacks(grepo: Path, origin: Path, tmp_path: Path, capsys):
+    """A clone that leaves an experiment's attachments off disk has not its manifest: `manifest` refuses to check it,
+    to add rows to it or to move them, and a check of every manifest fails on the ones it left out."""
+    data = tmp_path / "data.bin"
+    data.write_bytes(b"d" * 10)
+    assert run(grepo, "manifest", "EXP-0001", str(data)) == 0
+    b = partial_server(origin, tmp_path / "b")
+    capsys.readouterr()
+    for argv in (("manifest", "--check", "EXP-0001"), ("manifest", "EXP-0001", str(data)),
+                 ("manifest", "--move", str(tmp_path), str(tmp_path / "x"))):
+        assert run(b, *argv) == 2, argv
+        assert "not in this partial clone" in capsys.readouterr().err, argv
+    assert run(b, "manifest", "--check") == 1 and "not checked: the manifests of EXP-0001" in capsys.readouterr().out
+
