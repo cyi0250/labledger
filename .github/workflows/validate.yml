@@ -1,9 +1,13 @@
-# Every push is validated again here, behind the local hooks: a commit made with --no-verify, from a clone
-# without the hooks, or on the GitHub web still gets checked, and GitHub mails the pusher when it fails.
+# A push that changes the tool is checked here again: validate, and the tests on the oldest and a current Python. A push
+# of records alone runs nothing here, so a private ledger, whose Actions minutes are counted, spends none on its records.
+# The pre-push hook has validated the whole tree of each tip it pushes, so a broken record from a commit that skipped the
+# hooks (--no-verify, a clone without them, the GitHub web) stops the next push made with them. GitHub mails the pusher
+# when a run fails.
 name: validate
 on:
   push:
     branches: ["**"]  # not the number counter (refs/labledger/ids), which carries no records
+    paths: ["scripts/**", "tests/**", ".github/workflows/validate.yml"]
   pull_request:
   workflow_dispatch:
 concurrency:  # a burst of pushes runs at most twice: the one in progress and the newest waiting

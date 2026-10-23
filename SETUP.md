@@ -89,12 +89,16 @@ against what the ledger has committed:
 with its standard library alone, Linux or macOS (it locks files with `fcntl`), and git 2.28 or newer (tested with
 2.34). After changing it, `python3 -m pytest tests` passes: each test builds a small ledger in a temporary folder and
 runs commands on it; in the tool's source repository one also validates `examples/demo` and one makes a ledger with
-`setup`. This ledger itself is checked by validate in CI and by the hooks. A new rule comes with its check and a test.
+`setup`. This ledger itself is checked by the hooks, and by CI when a push changes the tool. A new rule comes with its
+check and a test.
 *Guidance:* it also gets a line in `validate --help` (or in `commit --help`, for a rule only a commit shows), which
 nothing checks.
 
 The tool's first commit in a clone sets `core.hooksPath` to `scripts/hooks`, unless git already has a `core.hooksPath`
 in any of its config files: then wire the two hooks into that setup by hand. While it is set, git does not run the
-scripts in `.git/hooks`. pre-commit checks a hand `git commit` as `commit` does; pre-push validates each tip it pushes
-and, when `scripts/` or `tests/` changed or the branch is new, runs the tests if pytest is installed. CI
-(`.github/workflows/validate.yml`) validates and runs the tests on every push.
+scripts in `.git/hooks`. pre-commit checks a hand `git commit` as `commit` does; pre-push validates the whole tree of
+each tip it pushes and, when `scripts/` or `tests/` changed or the branch is new, runs the tests if pytest is installed.
+CI (`.github/workflows/validate.yml`) validates and runs the tests on the oldest Python the tool supports and a current
+one, for a push that changes `scripts/`, `tests/` or that workflow. A push of records alone runs nothing in CI, so a
+private ledger, whose GitHub Actions minutes are counted, spends none on its records; a broken record from a commit
+that skipped the hooks stops the next push made with them.
